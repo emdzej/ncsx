@@ -45,6 +45,22 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.18)
 
+  packages/chassis:
+    dependencies:
+      '@emdzej/ncsx-daten':
+        specifier: workspace:*
+        version: link:../daten
+      '@emdzej/ncsx-text-tables':
+        specifier: workspace:*
+        version: link:../text-tables
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.1
+        version: 22.19.18
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.18)
+
   packages/daten:
     devDependencies:
       '@types/node':

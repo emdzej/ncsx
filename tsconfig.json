@@ -5,6 +5,7 @@
     { "path": "packages/pfl" },
     { "path": "packages/text-tables" },
     { "path": "packages/predicate" },
-    { "path": "packages/cabd" }
+    { "path": "packages/cabd" },
+    { "path": "packages/chassis" }
   ]
 }
