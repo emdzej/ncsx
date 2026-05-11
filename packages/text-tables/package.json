@@ -1,0 +1,29 @@
+{
+  "name": "@emdzej/ncsx-text-tables",
+  "version": "0.0.1",
+  "description": "Parsers for NCSEXPER DATEN text tables (SGFAM, ZST, AT, AT.M00, AT.ZUS). Spec: ../../docs/daten-format.md §2",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emdzej/ncsx.git",
+    "directory": "packages/text-tables"
+  }
+}
