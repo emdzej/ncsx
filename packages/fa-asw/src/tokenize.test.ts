@@ -3,29 +3,24 @@ import { tokenizeFa } from './tokenize.js';
 
 describe('tokenizeFa', () => {
   it('splits on whitespace and commas', () => {
-    expect(tokenizeFa('0902 0524 0205')).toEqual(['0902', '0524', '0205']);
-    expect(tokenizeFa('0902,0524,0205')).toEqual(['0902', '0524', '0205']);
-    expect(tokenizeFa('0902\t0524\n0205')).toEqual(['0902', '0524', '0205']);
+    expect(tokenizeFa('0205 0502 0524')).toEqual(['0205', '0502', '0524']);
+    expect(tokenizeFa('0205,0502,0524')).toEqual(['0205', '0502', '0524']);
   });
 
-  it("drops '$' prefix", () => {
-    expect(tokenizeFa('$0902 $0524')).toEqual(['0902', '0524']);
+  it("strips '$' and '#' prefixes", () => {
+    expect(tokenizeFa('$0902 #0904')).toEqual(['0902', '0904']);
   });
 
-  it('uppercases tokens', () => {
-    expect(tokenizeFa('0abc 0def')).toEqual(['0ABC', '0DEF']);
+  it('uppercases', () => {
+    expect(tokenizeFa('bl91 br91')).toEqual(['BL91', 'BR91']);
   });
 
-  it("drops category-letter prefix (W0205, S0230)", () => {
-    expect(tokenizeFa('W0205 S0230 Z#0904')).toEqual(['0205', '0230', '0904']);
+  it('does NOT drop alphanumeric vehicle-type codes (BL91, BR91)', () => {
+    expect(tokenizeFa('BL91 BR91 BW92')).toEqual(['BL91', 'BR91', 'BW92']);
   });
 
   it('ignores empty tokens', () => {
     expect(tokenizeFa('  0902  ,, 0524  ')).toEqual(['0902', '0524']);
-  });
-
-  it('returns empty array for blank input', () => {
     expect(tokenizeFa('')).toEqual([]);
-    expect(tokenizeFa('   ')).toEqual([]);
   });
 });

@@ -123,6 +123,9 @@ importers:
         specifier: workspace:*
         version: link:../chassis
     devDependencies:
+      '@emdzej/ncsx-predicate':
+        specifier: workspace:*
+        version: link:../predicate
       '@types/node':
         specifier: ^22.13.1
         version: 22.19.18

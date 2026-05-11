@@ -7,6 +7,7 @@ import type {
 } from '@emdzej/ncsx-text-tables';
 import type { CabdLoader } from './cabd-loader.js';
 import type { ZstIndex } from './indexes.js';
+import type { SwtTable } from './swt.js';
 
 export type ChassisWarning = {
   kind: 'missing-optional' | 'parse-failure';
@@ -50,6 +51,13 @@ export interface Chassis {
   atM00?: AtM00File;
   /** AT.ZUS (companion change-log / extension; same shape as AT). */
   atZus?: AtFile;
+
+  /** FSW name → ASW KEYID lookup (`<BR>SWTASW##.DAT`). Drives the predicate evaluator. */
+  swtAsw?: SwtTable;
+  /** FSW name → FSW KEYID lookup (`<BR>SWTFSW##.DAT`). Drives CABD PARZUWEISUNG_FSW resolution. */
+  swtFsw?: SwtTable;
+  /** PSW name → PSW value lookup (`<BR>SWTPSW##.DAT`). Drives FSW=PSW edit resolution. */
+  swtPsw?: SwtTable;
 
   /** Lazy CABD `.Cxx` loader (cached). */
   cabd: CabdLoader;

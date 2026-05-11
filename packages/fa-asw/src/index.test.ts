@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { faToAsw } from './index.js';
-import type { Chassis } from '@emdzej/ncsx-chassis';
+import { aswFromIds, faToAsw } from './index.js';
+import type { Chassis, SwtTable } from '@emdzej/ncsx-chassis';
 import type { AtRecord } from '@emdzej/ncsx-text-tables';
+
+const makeSwt = (entries: ReadonlyArray<readonly [string, number]>): SwtTable => {
+  const byKeyword = new Map<string, number>();
+  const byKeyId = new Map<number, string>();
+  for (const [kw, id] of entries) {
+    byKeyword.set(kw, id);
+    byKeyId.set(id, kw);
+  }
+  return { byKeyword, byKeyId, source: 'test' };
+};
 
 const baseChassis = (overrides: Partial<Chassis> = {}): Chassis => ({
   code: 'E46',
@@ -19,81 +29,75 @@ const baseChassis = (overrides: Partial<Chassis> = {}): Chassis => ({
   ...overrides,
 });
 
-describe('faToAsw — basic conversion', () => {
-  it('encodes each token as a u16 SA code', () => {
-    const asw = faToAsw('0902 0524 0205');
-    expect([...asw].sort((a, b) => a - b)).toEqual([0x0205, 0x0524, 0x0902]);
-  });
-
-  it("strips '$' / category prefixes", () => {
-    const asw = faToAsw('$0902 W0524 Z#0205');
-    expect(asw.has(0x0902)).toBe(true);
-    expect(asw.has(0x0524)).toBe(true);
-    expect(asw.has(0x0205)).toBe(true);
-  });
-
-  it('warns on malformed tokens but keeps going', () => {
-    const warns: string[] = [];
-    const asw = faToAsw('0902 6UD 0524', { onWarning: (w) => warns.push(w.kind) });
-    expect(asw.has(0x0902)).toBe(true);
-    expect(asw.has(0x0524)).toBe(true);
-    expect(warns).toContain('malformed-token');
-  });
-
-  it('throws on malformed token in strict mode', () => {
-    expect(() => faToAsw('0902 6UD', { strict: true })).toThrow(/6UD/);
-  });
-
-  it('returns an empty set for blank FA', () => {
-    expect(faToAsw('').size).toBe(0);
-  });
-
-  it('de-duplicates repeated tokens', () => {
-    const asw = faToAsw('0902 0902 902');
-    expect(asw.size).toBe(1);
-    expect(asw.has(0x0902)).toBe(true);
+describe('aswFromIds', () => {
+  it('returns a Set of u16-masked ids', () => {
+    const asw = aswFromIds([0x0016, 0x0029, 0x12345]);
+    expect([...asw].sort((a, b) => a - b)).toEqual([0x0016, 0x0029, 0x2345]);
   });
 });
 
-describe('faToAsw — with chassis', () => {
-  it('warns on codes missing from chassis AT', () => {
-    const at = new Map<string, AtRecord>([
-      ['0902', { category: 'W', code: '0902', fsws: [], comment: '' }],
-    ]);
-    const chassis = baseChassis({ at });
-    const warns: string[] = [];
-    faToAsw('0902 9999', { chassis, onWarning: (w) => warns.push(`${w.kind}`) });
-    expect(warns).toEqual(['unknown-code']);
+describe('faToAsw — resolves FA tokens through AT → SWTASW', () => {
+  it('walks W-record FSWs to ASW KEYIDs', () => {
+    const chassis = baseChassis({
+      at: new Map<string, AtRecord>([
+        ['BL91', { category: 'W', code: 'BL91', fsws: ['E46', 'COUP', 'LL'], comment: '' }],
+      ]),
+      swtAsw: makeSwt([
+        ['E46', 0x0001],
+        ['COUP', 0x0016],
+        ['LL', 0x0022],
+      ]),
+    });
+    const asw = faToAsw('BL91', { chassis });
+    expect([...asw].sort((a, b) => a - b)).toEqual([0x0001, 0x0016, 0x0022]);
   });
 
-  it('auto-includes Zwang entries from AT.M00', () => {
+  it('warns on unknown FA tokens but continues', () => {
     const chassis = baseChassis({
-      atM00: {
-        date: '22.01.2007',
-        filename: 'E46AT.M00',
-        entries: [
-          { category: 'Z', code: '#0904' },
-          { category: 'Z', code: '#0305' },
-          { category: 'W', code: '0100' },   // not Zwang — ignored
-        ],
-        unparsed: [],
-      },
+      at: new Map<string, AtRecord>([
+        ['BL91', { category: 'W', code: 'BL91', fsws: ['COUP'], comment: '' }],
+      ]),
+      swtAsw: makeSwt([['COUP', 0x0016]]),
+    });
+    const warns: string[] = [];
+    const asw = faToAsw('BL91 NOPE', { chassis, onWarning: (w) => warns.push(w.kind) });
+    expect(asw.has(0x0016)).toBe(true);
+    expect(warns).toContain('unknown-fa-code');
+  });
+
+  it("warns on FSWs that aren't in SWTASW", () => {
+    const chassis = baseChassis({
+      at: new Map<string, AtRecord>([
+        ['BL91', { category: 'W', code: 'BL91', fsws: ['MISSING'], comment: '' }],
+      ]),
+      swtAsw: makeSwt([]),
+    });
+    const warns: string[] = [];
+    faToAsw('BL91', { chassis, onWarning: (w) => warns.push(w.kind) });
+    expect(warns).toContain('unknown-fsw');
+  });
+
+  it('emits no-swt when chassis lacks SWTASW', () => {
+    const chassis = baseChassis();
+    const warns: string[] = [];
+    const asw = faToAsw('BL91', { chassis, onWarning: (w) => warns.push(w.kind) });
+    expect(asw.size).toBe(0);
+    expect(warns).toEqual(['no-swt']);
+  });
+
+  it('throws in strict mode', () => {
+    const chassis = baseChassis();
+    expect(() => faToAsw('BL91', { chassis, strict: true })).toThrow(/no-swt/);
+  });
+
+  it('looks up leading-zero variants of FA codes', () => {
+    const chassis = baseChassis({
+      at: new Map<string, AtRecord>([
+        ['902', { category: 'W', code: '902', fsws: ['SWA'], comment: '' }],
+      ]),
+      swtAsw: makeSwt([['SWA', 0x004c]]),
     });
     const asw = faToAsw('0902', { chassis });
-    expect(asw.has(0x0902)).toBe(true);
-    expect(asw.has(0x0904)).toBe(true);
-    expect(asw.has(0x0305)).toBe(true);
-    expect(asw.has(0x0100)).toBe(false);
-  });
-
-  it("looks up tokens against AT with leading-zero variants", () => {
-    const at = new Map<string, AtRecord>([
-      ['902', { category: 'W', code: '902', fsws: [], comment: '' }],
-    ]);
-    const chassis = baseChassis({ at });
-    const warns: string[] = [];
-    faToAsw('0902', { chassis, onWarning: (w) => warns.push(w.kind) });
-    // '0902' isn't in AT but '902' (stripped of leading zeros) is — no warning.
-    expect(warns).toEqual([]);
+    expect(asw.has(0x004c)).toBe(true);
   });
 });

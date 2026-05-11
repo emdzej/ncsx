@@ -10,6 +10,7 @@ import {
 import { loadBrRef, resolveChassisCode } from './br-ref.js';
 import { CabdLoader } from './cabd-loader.js';
 import { indexAt, indexSgfam, indexZst } from './indexes.js';
+import { loadSwtFile } from './swt.js';
 import type { ChassisSource } from './source.js';
 import type { Chassis, ChassisWarning, LoadChassisOptions } from './types.js';
 
@@ -143,6 +144,27 @@ export async function loadChassis(
   const atRaw: AtFile | undefined = atFile;
   const atZus: AtFile | undefined = atZusFile;
 
+  // SWT lookup tables — chassis ships them as `SWT(ASW|FSW|PSW)<NN>.dat`. The `<NN>` is a
+  // revision suffix; we don't know it upfront, so `loadSwtFile` lists the directory and picks
+  // the matching file. Missing files emit a warning and leave the field `undefined`.
+  const [swtAsw, swtFsw, swtPsw] = await Promise.all([
+    loadSwtFile(source, layout.dir, 'ASW').catch((err) => {
+      onWarning({ kind: 'parse-failure', file: `${layout.dir}/SWTASW*.dat`, message: String(err) });
+      return undefined;
+    }),
+    loadSwtFile(source, layout.dir, 'FSW').catch((err) => {
+      onWarning({ kind: 'parse-failure', file: `${layout.dir}/SWTFSW*.dat`, message: String(err) });
+      return undefined;
+    }),
+    loadSwtFile(source, layout.dir, 'PSW').catch((err) => {
+      onWarning({ kind: 'parse-failure', file: `${layout.dir}/SWTPSW*.dat`, message: String(err) });
+      return undefined;
+    }),
+  ]);
+  if (!swtAsw) onWarning({ kind: 'missing-optional', file: `${layout.dir}/SWTASW*.dat`, message: 'no SWTASW lookup' });
+  if (!swtFsw) onWarning({ kind: 'missing-optional', file: `${layout.dir}/SWTFSW*.dat`, message: 'no SWTFSW lookup' });
+  if (!swtPsw) onWarning({ kind: 'missing-optional', file: `${layout.dir}/SWTPSW*.dat`, message: 'no SWTPSW lookup' });
+
   const cabd = new CabdLoader(source, layout.dir, sgfam);
 
   return {
@@ -161,6 +183,9 @@ export async function loadChassis(
     atRaw,
     atM00: atM00File,
     atZus,
+    swtAsw,
+    swtFsw,
+    swtPsw,
     cabd,
   };
 }

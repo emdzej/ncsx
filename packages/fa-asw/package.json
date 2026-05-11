@@ -18,6 +18,7 @@
     "@emdzej/ncsx-chassis": "workspace:*"
   },
   "devDependencies": {
+    "@emdzej/ncsx-predicate": "workspace:*",
     "@types/node": "^22.13.1",
     "vitest": "^2.1.8"
   },

@@ -10,30 +10,28 @@ const DATEN_ROOT = join(homedir(), 'Downloads', 'inpa', 'NCSEXPER', 'DATEN');
 const haveSamples = existsSync(DATEN_ROOT);
 
 (haveSamples ? describe : describe.skip)('integration — real E46 selection', () => {
-  it('returns at least one SG for a non-empty ASW', async () => {
+  it('returns at least one SG for a fully populated ASW', async () => {
     const chassis = await loadChassis(nodeChassisSource(DATEN_ROOT), 'E46');
-    // Most-permissive ASW: include every SA in the AT dictionary.
+    // Most-permissive ASW: include every FA code's resolved FSWs.
     const allAt = chassis.at ? [...chassis.at.keys()].join(' ') : '';
-    const asw = faToAsw(allAt);
+    const asw = faToAsw(allAt, { chassis, onWarning: () => undefined });
     const warns: string[] = [];
     const selected = selectEcus(chassis, asw, { onWarning: (m) => warns.push(m) });
     expect(selected.length).toBeGreaterThan(0);
   });
 
-  it('an empty ASW still surfaces the rows with empty/permissive predicates', async () => {
+  it('an empty ASW still surfaces rows with empty/permissive predicates', async () => {
     const chassis = await loadChassis(nodeChassisSource(DATEN_ROOT), 'E46');
     const selected = selectEcus(chassis, new Set(), { onWarning: () => undefined });
-    // Empty predicate counts as match-everyone; some rows in real SGET have empty A fields.
-    // We don't assert a specific count — just that the call returns without throwing.
     expect(Array.isArray(selected)).toBe(true);
   });
 
-  it('every returned SG resolves to a SGFAM row', async () => {
+  it('every returned SG has a recognisable name', async () => {
     const chassis = await loadChassis(nodeChassisSource(DATEN_ROOT), 'E46');
-    const asw = faToAsw(chassis.at ? [...chassis.at.keys()].slice(0, 30).join(' ') : '');
+    const sample = chassis.at ? [...chassis.at.keys()].slice(0, 30).join(' ') : '';
+    const asw = faToAsw(sample, { chassis, onWarning: () => undefined });
     const selected = selectEcus(chassis, asw, { onWarning: () => undefined });
     for (const sg of selected) {
-      // SGNAME must look like a short logical SG identifier (3-6 chars, uppercase/digits).
       expect(sg.sgName).toMatch(/^[A-Z0-9_]+$/);
     }
   });
