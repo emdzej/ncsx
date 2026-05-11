@@ -4,7 +4,8 @@ Reverse-engineering notes for BMW's **NCS Expertentool** (NCSEXPER 4.0.1, 2013) 
 
 ## Read order
 
-1. **[`NCSEXPER-REVERSE-ENG.md`](NCSEXPER-REVERSE-ENG.md)** — start here. Architecture, COAPI/CDH/INPA/EDIABAS stack, EDIABAS jobs the tool invokes, suggested re-implementation order.
+0. **[`STATUS.md`](STATUS.md)** — current ncsx snapshot + resume-from-here pointers. Start here if you're picking the project back up after a break.
+1. **[`NCSEXPER-REVERSE-ENG.md`](NCSEXPER-REVERSE-ENG.md)** — architecture, COAPI/CDH/INPA/EDIABAS stack, EDIABAS jobs the tool invokes, suggested re-implementation order.
 2. **[`pfl-format.md`](pfl-format.md)** — PFL profile INI schema (every section, every key, value ranges, shipped profiles).
 3. **[`daten-format.md`](daten-format.md)** — DATEN folder formats. Binary frame format (signature, frame types, format-string language, the `A` OPERATION 9-operator set, the `EINHEIT` 5-unit set) **and** the text-table family (`ZST`, `AT`, `SGFAM`, `AT.M00`, `AT.ZUS`, `VARIABLE.ASC`).
 4. **[`ecu-selection.md`](ecu-selection.md)** — runtime flow: `(BR, VIN, ZCS, FA)` + profile → concrete ECU work list. Includes the `AUFTRAGSAUSDRUCK` byte-coded predicate grammar.
