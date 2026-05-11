@@ -6,6 +6,7 @@
     { "path": "packages/text-tables" },
     { "path": "packages/predicate" },
     { "path": "packages/cabd" },
-    { "path": "packages/chassis" }
+    { "path": "packages/chassis" },
+    { "path": "packages/fa-asw" }
   ]
 }
