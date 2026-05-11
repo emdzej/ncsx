@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../cabd" },
+    { "path": "../chassis" },
+    { "path": "../daten" },
+    { "path": "../ecu-select" },
+    { "path": "../fa-asw" }
+  ]
+}

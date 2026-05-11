@@ -8,6 +8,7 @@
     { "path": "packages/cabd" },
     { "path": "packages/chassis" },
     { "path": "packages/fa-asw" },
-    { "path": "packages/ecu-select" }
+    { "path": "packages/ecu-select" },
+    { "path": "packages/coder" }
   ]
 }

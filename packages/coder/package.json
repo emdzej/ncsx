@@ -1,0 +1,36 @@
+{
+  "name": "@emdzej/ncsx-coder",
+  "version": "0.0.1",
+  "description": "Top-level coding orchestrator: chassis + FA + FSW/PSW edits → per-SG netto buffers ready for CODIERDATEN_SCHREIBEN.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/ncsx-cabd": "workspace:*",
+    "@emdzej/ncsx-chassis": "workspace:*",
+    "@emdzej/ncsx-daten": "workspace:*",
+    "@emdzej/ncsx-ecu-select": "workspace:*",
+    "@emdzej/ncsx-fa-asw": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emdzej/ncsx.git",
+    "directory": "packages/coder"
+  }
+}
