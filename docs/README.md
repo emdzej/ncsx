@@ -11,7 +11,8 @@ Reverse-engineering notes for BMW's **NCS Expertentool** (NCSEXPER 4.0.1, 2013) 
 5. **[`trc-man-files.md`](trc-man-files.md)** — what NCSEXPER writes to `WORK\*.TRC` and `WORK\*.MAN`, and where the toggles live (it's a COAPI-side concern, not part of the EDIABAS protocol).
 6. **[`coding-flow.md`](coding-flow.md)** — the end-to-end FSW/PSW ↔ netto-byte translation: ZST → CABD → OPERATION inversion → MASKE splice → `CODIERDATEN_SCHREIBEN`. Worked examples for both write (encode) and read (decode) directions.
 7. **[`ssd-zut-format.md`](ssd-zut-format.md)** — `.ssd` / ZUT verifier record format (record-tag-driven script consumed by NCSEXPER's ZUT/VFP subsystems when `[VERIFIKATION].ZutEin=1` / `.VfpEin=1`).
-8. **[`POC-DELTAS.md`](POC-DELTAS.md)** — concrete patch list against the existing `bimmerz/packages/ncs-data` TypeScript POC, mapped to line numbers + spec sections.
+8. **[`ipo-usage.md`](ipo-usage.md)** — when NCSEXPER runs `SGDAT/*.ipo`, the two IPO styles (cabi / INPA), the syscalls those IPOs invoke, and how NCSEXPER hosts INPA's UI primitives alongside its own MFC dialog.
+9. **[`POC-DELTAS.md`](POC-DELTAS.md)** — concrete patch list against the existing `bimmerz/packages/ncs-data` TypeScript POC, mapped to line numbers + spec sections.
 
 ## Status
 
