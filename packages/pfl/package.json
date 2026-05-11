@@ -1,0 +1,32 @@
+{
+  "name": "@emdzej/ncsx-pfl",
+  "version": "0.0.1",
+  "description": "Parser/serializer for NCSEXPER .pfl profile files. Spec: ../../docs/pfl-format.md",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/inpax-ini-parser": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emdzej/ncsx.git",
+    "directory": "packages/pfl"
+  }
+}
