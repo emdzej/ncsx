@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/daten" },
+    { "path": "packages/pfl" },
+    { "path": "packages/text-tables" },
+    { "path": "packages/predicate" },
+    { "path": "packages/cabd" }
+  ]
+}
