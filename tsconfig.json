@@ -7,6 +7,7 @@
     { "path": "packages/predicate" },
     { "path": "packages/cabd" },
     { "path": "packages/chassis" },
-    { "path": "packages/fa-asw" }
+    { "path": "packages/fa-asw" },
+    { "path": "packages/ecu-select" }
   ]
 }

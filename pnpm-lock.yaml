@@ -70,6 +70,28 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.18)
 
+  packages/ecu-select:
+    dependencies:
+      '@emdzej/ncsx-chassis':
+        specifier: workspace:*
+        version: link:../chassis
+      '@emdzej/ncsx-daten':
+        specifier: workspace:*
+        version: link:../daten
+      '@emdzej/ncsx-fa-asw':
+        specifier: workspace:*
+        version: link:../fa-asw
+      '@emdzej/ncsx-predicate':
+        specifier: workspace:*
+        version: link:../predicate
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.1
+        version: 22.19.18
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.18)
+
   packages/fa-asw:
     dependencies:
       '@emdzej/ncsx-chassis':

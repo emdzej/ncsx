@@ -1,0 +1,35 @@
+{
+  "name": "@emdzej/ncsx-ecu-select",
+  "version": "0.0.1",
+  "description": "Walks <BR>SGET.000 to produce the in-scope SG list for a given chassis + ASW. Equivalent of NCSEXPER's coapiScanAllSgFromBr.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/ncsx-chassis": "workspace:*",
+    "@emdzej/ncsx-daten": "workspace:*",
+    "@emdzej/ncsx-fa-asw": "workspace:*",
+    "@emdzej/ncsx-predicate": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emdzej/ncsx.git",
+    "directory": "packages/ecu-select"
+  }
+}
