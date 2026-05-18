@@ -18,8 +18,14 @@ Disassembling shipped IPOs shows two distinct styles:
 
 | Style | Entry points | Purpose | Typical syscalls |
 |-------|--------------|---------|------------------|
-| **A — cabi-style** (e.g. `00EK9272.ipo`) | `cabimain`, `cabiexit` | Per-SG diag-job dispatcher. The `Jobs` function in the IPO switches by job name and calls `INPAapiJob(SGBD, JOB, params)`. Used by INPA's job-runner menu and by NCSEXPER's Kernfunktionen / Job-Liste features. | `INPAapiJob`, `PEMSGZ_*`, `setjobstatus`, `OutputDebugString` |
+| **A — CABI-style** (e.g. `00EK9272.ipo`) | `cabimain`, `cabiexit` | Per-SG diag-job dispatcher. The `Jobs` function in the IPO switches by job name and calls `INPAapiJob(SGBD, JOB, params)`. Used by INPA's job-runner menu and by NCSEXPER's Kernfunktionen / Job-Liste features. | `INPAapiJob`, `PEMSGZ_*`, `setjobstatus`, `OutputDebugString`, plus `CDH*` calls into the CABI DLL (see §4 below). |
 | **B — INPA-style** (e.g. `ews.ipo`) | `inpainit`, `inpaexit` | Full interactive diagnostic. Live-data screens, menu navigation, fault-memory views. Used by NCSEXPER's Kernfunktionen flow when the script is interactive (rather than batch-job). | `setscreen`, `setmenu`, `userbox*`, `ftextout`, `digitalout`, `analogout`, `INPAapiResult*` |
+
+**"CABI-style" labels a calling convention**, not an `cabi.ipo` shared library. The script's
+entry points (`cabimain`/`cabiexit`) and its calls to `CDH*` / `apiJob` functions are
+resolved through the **external-DLL bridge** described in §4 — they do not import from
+another `.ipo` file. There is no IPO-to-IPO import mechanism; cross-script transfer only
+happens via `scriptchange` / `scriptselect` (whole-script replace).
 
 ## 2. Syscalls the IPOs make
 
@@ -89,12 +95,69 @@ The split:
 - **INPA-style UI** (hosted) — anything an IPO renders via `setscreen`/`setmenu`/`userbox*`. The same widget primitives `inpa.exe` uses, re-implemented inside NCSEXPER.
 - **Protokoll report** — assembled by `PEM*` syscalls inside IPOs; displayed by NCSEXPER's report window. Printable via `printfile`/`printscreen`.
 
+## 4. The CABI bridge — how IPOs reach `CDH*` functions
+
+CABI-style IPO scripts call functions like `CDHGetCabdName`, `CDHapiJob`,
+`CDHGetFswPswDataFromCbd`, etc. These functions are **not** in another `.ipo` — they live
+in a Windows DLL the host process loads at startup:
+
+| File                             | Role                                                       |
+|----------------------------------|------------------------------------------------------------|
+| `NCSEXPER/BIN/Cabiger.dll` (58 KB) | German-strings build of the CABI runtime                 |
+| `NCSEXPER/BIN/CabiUS.dll` (55 KB)  | US-English build (same code, localised strings)          |
+| `NCSEXPER/SGDAT/CABI.H` (391 lines) | C-header with ~80 `extern` declarations, fed to the IPO compiler |
+
+### Mechanism
+
+```
+IPO bytecode   ───CALLE 0x0D, const_idx──>   "CDHGetCabdName" (const-pool string)
+                                              │
+                                              ▼
+                                  IPO interpreter symbol resolver
+                                              │
+                                              ▼
+                                  Cabiger.dll / CabiUS.dll export table
+                                              │
+                                              ▼
+                                  Native CDH function implementation
+```
+
+The IPO compiler reads `CABI.H` to typecheck the calls (in/out parameter directions and
+types) and emits `0x0D CALLE` instructions with the function name in the IPO's constant
+pool. At runtime the embedded interpreter resolves the name against the loaded DLL's
+exports and marshals arguments per the header's signature.
+
+This is the same `0x0D CALLE` opcode documented in inpax's
+[`interpreter-analysis.md` §0x0D](../../inpax/docs/interpreter-analysis.md) — "Call
+external DLL".
+
+### Why the `CDH*` strings show up inside NCSEXPER.EXE
+
+The Ghidra trace earlier pointed at strings like `CDHGetCabdName` at `0x005afbc4`,
+`CDHGetCodierBaureihe` at `0x005afc60`, etc. — see
+[`ecu-selection.md` §8.5](ecu-selection.md). Two reasons:
+
+1. **Debug-trace labels.** Each CDH function emits its own name on entry to the COAPI
+   tracer, so the strings are stored in NCSEXPER.EXE even when the implementation is in
+   the DLL.
+2. **In-process callbacks.** A handful of CDH functions are also called directly from
+   COAPI's C++ code (no IPO involved) — for those, NCSEXPER has its own
+   implementation alongside the DLL's.
+
+### What this means for ncsx (Phase 9)
+
+When we add the Kernfunktionen runner, we'll need a CABI binding package that registers
+all `~80` CABI functions with the inpax interpreter's system-function table, routing
+each to the appropriate ncsx package. Detailed plan + per-function package mapping in
+[`cabi-binding-plan.md`](cabi-binding-plan.md).
+
 ## TL;DR
 
 - IPOs aren't on the **coding** hot path; COAPI calls `apiJob` directly.
 - IPOs power the **Kernfunktionen** menu (diagnostic jobs and live data).
-- Two styles of IPO live in `SGDAT/`: cabi-style (`cabimain`/`cabiexit`) for batch job dispatch, INPA-style (`inpainit`/`inpaexit`) for interactive screens.
+- Two styles of IPO live in `SGDAT/`: CABI-style (`cabimain`/`cabiexit`) for batch job dispatch, INPA-style (`inpainit`/`inpaexit`) for interactive screens.
 - All IPOs use the same INPA UI syscalls (`setscreen`, `setmenu`, `userbox*`, gauges) plus EDIABAS bridge calls (`INPAapiJob`, `INPAapiResult*`) and the PEM print-output API.
 - NCSEXPER **embeds the full INPA UI runtime** to make these syscalls work — confirmed by the linked-in window-class strings and the embedded interpreter's function table.
+- The `CDH*` functions CABI-style scripts call live in **`Cabiger.dll` / `CabiUS.dll`** and are reached via the IPO interpreter's external-DLL bridge (opcode `0x0D CALLE`).
 
-For ncsx: when we get to "run a Kernfunktion" feature, we can reuse the `@emdzej/inpax` interpreter as-is. The system-function table we need to implement is the INPA one — same names, same signatures — plus the PEM print-output helpers (which we can route to stdout / a log file rather than a print spool).
+For ncsx: when we get to "run a Kernfunktion" feature, we can reuse the `@emdzej/inpax` interpreter as-is. The system-function table we need to implement is the INPA one — same names, same signatures — plus the PEM print-output helpers (route to a log buffer instead of a print spool) and the CABI surface (see [`cabi-binding-plan.md`](cabi-binding-plan.md)).
