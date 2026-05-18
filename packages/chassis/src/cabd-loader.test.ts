@@ -2,70 +2,76 @@ import { describe, expect, it } from 'vitest';
 import { CabdLoader, CabdNotFoundError } from './cabd-loader.js';
 import { inMemoryChassisSource } from './source-memory.js';
 import { buildDst } from './test-helpers.js';
-import type { SgfamRow } from '@emdzej/ncsx-text-tables';
 
 const stubBytes = buildDst();
 
-const sgfam = new Map<string, SgfamRow>([
-  ['EWS', { sgName: 'EWS', cabd: 'A_EWS3', sgbd: 'C_EWS3', zcs: 1, fa: 0, comment: '' }],
-  ['KMB', { sgName: 'KMB', cabd: 'A_KMB46', sgbd: 'C_KMB46', zcs: 1, fa: 0, comment: '' }],
-]);
-
-describe('CabdLoader', () => {
-  it('resolves SG → CABD module and loads the exact .Cxx requested', async () => {
+describe('CabdLoader.openModule', () => {
+  it('opens the requested .Cxx by basename + ci', async () => {
     const src = inMemoryChassisSource(
       new Map([
-        ['e46/A_EWS3.C07', stubBytes],
-        ['e46/A_EWS3.C09', stubBytes],
+        ['e46/EWS.C07', stubBytes],
+        ['e46/EWS.C09', stubBytes],
       ]),
     );
-    const loader = new CabdLoader(src, 'e46', sgfam);
-    const file = await loader.forSg('EWS', 0x07);
+    const loader = new CabdLoader(src, 'e46');
+    const file = await loader.openModule('EWS', 0x07);
     expect(file.blocks.length).toBeGreaterThan(0);
   });
 
-  it('finds the single .Cxx when ci is omitted', async () => {
-    const src = inMemoryChassisSource(new Map([['e46/A_KMB46.C03', stubBytes]]));
-    const loader = new CabdLoader(src, 'e46', sgfam);
-    const file = await loader.forSg('KMB');
-    expect(file.blocks.length).toBeGreaterThan(0);
-  });
-
-  it('throws if multiple .Cxx match and no ci was given', async () => {
-    const src = inMemoryChassisSource(
-      new Map([
-        ['e46/A_EWS3.C07', stubBytes],
-        ['e46/A_EWS3.C09', stubBytes],
-      ]),
-    );
-    const loader = new CabdLoader(src, 'e46', sgfam);
-    await expect(loader.forSg('EWS')).rejects.toThrow(CabdNotFoundError);
-  });
-
-  it('throws if no .Cxx exists for the CABD', async () => {
+  it('throws if the requested module is missing', async () => {
     const src = inMemoryChassisSource(new Map());
-    const loader = new CabdLoader(src, 'e46', sgfam);
-    await expect(loader.forSg('EWS')).rejects.toThrow(CabdNotFoundError);
+    const loader = new CabdLoader(src, 'e46');
+    await expect(loader.openModule('EWS', 0x07)).rejects.toThrow(CabdNotFoundError);
   });
 
-  it('throws if the SG is missing from SGFAM', async () => {
-    const src = inMemoryChassisSource(new Map());
-    const loader = new CabdLoader(src, 'e46', sgfam);
-    await expect(loader.forSg('NOPE')).rejects.toThrow(/not in SGFAM/);
-  });
-
-  it('caches by (CABD, ci)', async () => {
-    const src = inMemoryChassisSource(new Map([['e46/A_EWS3.C07', stubBytes]]));
-    const loader = new CabdLoader(src, 'e46', sgfam);
-    const a = await loader.forSg('EWS', 0x07);
-    const b = await loader.forSg('EWS', 0x07);
+  it('caches by (basename, ci)', async () => {
+    const src = inMemoryChassisSource(new Map([['e46/EWS.C07', stubBytes]]));
+    const loader = new CabdLoader(src, 'e46');
+    const a = await loader.openModule('EWS', 0x07);
+    const b = await loader.openModule('EWS', 0x07);
     expect(a).toBe(b);
   });
 
-  it('accepts case-insensitive directory entries (.c07 vs .C07)', async () => {
-    const src = inMemoryChassisSource(new Map([['e46/a_ews3.c07', stubBytes]]));
-    const loader = new CabdLoader(src, 'e46', sgfam);
-    const file = await loader.forSg('EWS', 0x07);
+  it('accepts case-insensitive directory entries (.c07 matches request for .C07)', async () => {
+    const src = inMemoryChassisSource(new Map([['e46/ews.c07', stubBytes]]));
+    const loader = new CabdLoader(src, 'e46');
+    const file = await loader.openModule('EWS', 0x07);
     expect(file.blocks.length).toBeGreaterThan(0);
+  });
+});
+
+describe('CabdLoader.listModules', () => {
+  it('groups .Cxx files by basename, sorted, with ascending coding indexes', async () => {
+    const src = inMemoryChassisSource(
+      new Map([
+        ['e46/KMB_E46.C06', stubBytes],
+        ['e46/KMB_E46.C02', stubBytes],
+        ['e46/KMB_E46.C07', stubBytes],
+        ['e46/EWS.C81', stubBytes],
+        ['e46/SOMETHING.txt', stubBytes], // ignored — not .Cxx
+      ]),
+    );
+    const loader = new CabdLoader(src, 'e46');
+    const modules = await loader.listModules();
+    expect(modules).toEqual([
+      { moduleName: 'EWS', codingIndexes: [0x81] },
+      { moduleName: 'KMB_E46', codingIndexes: [0x02, 0x06, 0x07] },
+    ]);
+  });
+
+  it('returns the cached result on repeat calls', async () => {
+    const src = inMemoryChassisSource(new Map([['e46/EWS.C07', stubBytes]]));
+    const loader = new CabdLoader(src, 'e46');
+    const a = await loader.listModules();
+    const b = await loader.listModules();
+    expect(a).toBe(b);
+  });
+
+  it('returns an empty list for a chassis dir with no .Cxx files', async () => {
+    const src = inMemoryChassisSource(
+      new Map([['e46/E46DST.000', stubBytes]]),
+    );
+    const loader = new CabdLoader(src, 'e46');
+    expect(await loader.listModules()).toEqual([]);
   });
 });

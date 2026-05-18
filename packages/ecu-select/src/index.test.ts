@@ -34,7 +34,7 @@ const SBlock = (
   })),
 });
 
-const empty = (): DatenFile => ({ signatures: [], blocks: [] });
+const empty = (): DatenFile => ({ signatures: [], blocks: [], rowsInOrder: [] });
 
 const baseChassis = (sget: DatenFile): Chassis => ({
   code: 'E46',

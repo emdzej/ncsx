@@ -286,9 +286,101 @@ _sprintf(result, "V%s%s.%s", UMRSG, VMG, CABD);
 
 Then `UMRSG` is looked up in a runtime variant-mapping table (`FUN_00448a90`) to return an index. So UMRSG is the **Umrechnungs-Steuergerät** — the "translation SG" used to resolve a logical SG name to its variant-specific equivalent in the current chassis. It's part of the same lookup chain as `<BR>SGFAM.DAT` but operates per-row inside SGET rather than as a chassis-wide table.
 
-When the FA matcher selects a row from `SGAUSWAHL_VMSGBD`, `SGAUSWAHL_SGBD`, or `SGAUSWAHL_VM`, the resolved tuple is `{ SGNAME, CBD, CABD?, SGBD?, UMRSG, VMG?, AUFTRAGSAUSDRUCK, INDEX }`. The `?`-marked fields appear only in the more-specific blocks. Downstream coding routines combine UMRSG + VMG + CABD via the `V%s%s.%s` template above, then look up the netto-data file by that key.
+When the FA matcher selects a row from `SGAUSWAHL_VMSGBD`, `SGAUSWAHL_SGBD`, or `SGAUSWAHL_VM`, the resolved tuple is `{ SGNAME, CBD, CABD?, SGBD?, UMRSG, VMG?, AUFTRAGSAUSDRUCK, INDEX }`. The `?`-marked fields appear only in the more-specific blocks.
 
-## 8. Open questions
+The `V%s%s.%s` template composes an **internal lookup key** used by `FUN_00448a90` to map UMRSG to its variant-specific equivalent. It is *not* a path to an on-disk file — for that, see §8 below.
+
+## 8. CABD `.Cxx` file resolution (on disk)
+
+This is the question every consumer hits first: **"given an SG, which `.Cxx` file on disk
+holds its coding data?"** NCSEXPER's logic, confirmed by Ghidra (`FUN_00427610` —
+`coapiReadCbdFromBr` — walks `SGAUSWAHL_*` rows via `FUN_00434060` =
+`coapiGetAllSgetData`) and by inspecting real E46 DATEN:
+
+**The on-disk path is `<chassis_dir>/<SGAUSWAHL.SGNAME>.<SGAUSWAHL.CBD>`** — the `.` is
+literal; `CBD` already includes the leading `C`.
+
+### 8.1 Evidence from E46
+
+`E46/E46SGET.000`, `SGAUSWAHL_SGBD` block (truncated):
+
+| SGNAME      | CBD   | CABD       | SGBD       | UMRSG  | → on-disk file       |
+|-------------|-------|------------|------------|--------|----------------------|
+| `KMB_E46`   | `C06` | `A_KMB46`  | `C_KMB46`  | `KMB`  | `e46/KMB_E46.C06` ✓ |
+| `KMB_E46`   | `C06` | `A_AKMB46` | `C_KMB46`  | `AKMB` | `e46/KMB_E46.C06` ✓ |
+| `KMB_E46`   | `C07` | `A_KMB46`  | `KOMBI46R` | `KMB`  | `e46/KMB_E46.C07` ✓ |
+| `KMBE46M3`  | `C20` | `A_KMB46`  | `C_KMB46`  | `KMB`  | `e46/KMBE46M3.C20` ✓ |
+| `EWS`       | `C81` | `A_EWS3`   | `C_EWS3`   | `EWS`  | `e46/EWS.C81` ✓     |
+| `EWS`       | `C81` | `A_AEWS3`  | `C_EWS3`   | `EWS`  | `e46/EWS.C81` ✓     |
+| `LSZ`       | `C31` | `A_ALSZ`   | `C_LSZA`   | `ALSZ` | `e46/LSZ.C31` ✓     |
+
+Note: the same `(SGNAME, CBD)` pair can appear in multiple rows, each with a different
+`UMRSG` / `CABD` / `SGBD` combination. That's how one physical coding file (e.g.
+`KMB_E46.C06`) services multiple **logical** SGs (`KMB` and `AKMB`) — both rows point
+to the same `.Cxx` file; the choice of logical-SG row affects which EDIABAS module to
+talk to (`SGBD`) and which logical name to show in the UI (`UMRSG`).
+
+### 8.2 Column meanings (cross-reference table)
+
+| Column                       | Role                                                        |
+|------------------------------|-------------------------------------------------------------|
+| `SGAUSWAHL_*.SGNAME`         | **Physical coding-file basename.** Use to build the path.   |
+| `SGAUSWAHL_*.CBD`            | Coding-index suffix, already including the leading `C`.     |
+| `SGAUSWAHL_*.CABD`           | Logical CABD name (same value as `SGFAM.CABD`). Bookkeeping; **not** a file basename. |
+| `SGAUSWAHL_*.SGBD`           | EDIABAS module — feed to `apiJob(sgbd, …)`.                 |
+| `SGAUSWAHL_*.UMRSG`          | Logical SG name. Matches `SGFAM.SG` and is what NCS Expert's UI dropdown shows. |
+| `SGFAM.SG`                   | Logical SG name (= `SGAUSWAHL.UMRSG`).                      |
+| `SGFAM.CABD`                 | Logical CABD name (= `SGAUSWAHL.CABD`). **Not a file basename.** |
+| `SGFAM.SGBD`                 | EDIABAS module (= `SGAUSWAHL.SGBD`).                        |
+
+### 8.3 Anti-patterns
+
+- **Do not** use `SGFAM.CABD` as a file basename. `A_KMB46` is not `KMB_E46.C0?`; `A_EWS3`
+  is not `EWS.C81`. There is no string transform that gets you from one to the other —
+  the relationship is bookkeeping only.
+- **Do not** assume `SGFAM.SG` matches `SGAUSWAHL.SGNAME`. SGFAM.SG matches
+  `SGAUSWAHL.UMRSG`. `SGAUSWAHL.SGNAME` is the *file* basename.
+- **Do not** assume one logical SG → one `.Cxx` file. `AKMB` shares `KMB_E46.C0?` with
+  `KMB` (different `UMRSG`, same `SGNAME` / `CBD`).
+
+### 8.4 The two correct lookup paths
+
+**FA-driven** (what NCS Expert does): walk `SGAUSWAHL_VMSGBD` → `SGAUSWAHL_SGBD` →
+`SGAUSWAHL_VM` and evaluate each row's `AUFTRAGSAUSDRUCK` against the FA-derived ASW. For
+each surviving row:
+
+```
+file       = <chassis_dir>/<row.SGNAME>.<row.CBD>
+sgbd       = row.SGBD                    // for apiJob()
+ui_label   = row.UMRSG                   // what to show the user
+```
+
+This is what `packages/ecu-select` returns as `SelectedSg[]` (`selected.sgName` is the
+SGAUSWAHL `SGNAME`, `selected.cbd` is the suffix).
+
+**File-system enumeration** (what NCS Dummy does): `Directory.GetFiles(chassisDir,
+"*.C??")`, group by basename. Each entry is `(SGNAME, [CBD, …])` directly — no SGAUSWAHL
+walk needed. To label each module with its logical SG(s), find `SGAUSWAHL_*` rows where
+`SGNAME == basename`, then collect their `UMRSG` column.
+
+This is what `packages/chassis`'s `CabdLoader.listModules()` returns and what
+`apps/ncsx-web`'s `ModuleList` renders.
+
+### 8.5 Ghidra source-code anchors
+
+- `FUN_00427610` — `coapiReadCbdFromBr`. Walks `SGAUSWAHL_*` rows, collects parallel
+  `CBD` and `CABD` arrays.
+- `FUN_00434060` — `coapiGetAllSgetData`. Row iterator over the active SGAUSWAHL block.
+  Seven output parameters in the SGAUSWAHL_SGBD case: `(SGNAME, CBD, CABD, SGBD, UMRSG,
+  AUFTRAGSAUSDRUCK_bytes, INDEX)`. Exact column-to-parameter mapping depends on which
+  `SGAUSWAHL_*` block is active (`SGAUSWAHL_VM` drops CABD/SGBD; `SGAUSWAHL_VMSGBD`
+  adds `VMG`).
+- `FUN_00432500` — `CDHGetCabdName`. Trivial getter, copies the currently-selected
+  CABD's logical name out of `DAT_0061a6d4`. The setter is in the SGAUSWAHL walker.
+- NCS Dummy parallel: `Classes/Modules/ModuleListReader.cs:25-43` (`Directory.GetFiles`
+  pattern).
+
+## 9. Open questions
 
 1. **`VMG` / `VM` matching tie-breakers** — when two `SGAUSWAHL_VM` rows match, which wins? Probably the first (file order), but this needs confirming by single-step in Ghidra through `coapiGetVmSgName`.
 2. **ZCSUT update flow** — `coapiChangeZcsVm` rewrites ZCS after coding when `[CODING].ZcsutLesen=1` / `ZcsSchreibenModus=3`; the rules for which SGs receive the write are in `<BR>ZCSUT.000` and not yet decoded. Related: see `docs/ssd-zut-format.md` for the `.ssd`/ZUT record format that drives this subsystem.

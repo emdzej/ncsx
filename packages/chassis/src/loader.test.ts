@@ -43,7 +43,7 @@ const baseFiles = (): Map<string, Uint8Array> =>
     ['e46/E46ZST.000', ascii(ZST_TEXT)],
     ['e46/E46AT.000', ascii(AT_TEXT)],
     ['e46/E46AT.M00', ascii(AT_M00_TEXT)],
-    ['e46/A_EWS3.C07', buildDst()],
+    ['e46/EWS.C07', buildDst()],
   ]);
 
 describe('loadChassis', () => {
@@ -99,7 +99,9 @@ describe('loadChassis', () => {
   it('exposes a working lazy CABD loader', async () => {
     const src = inMemoryChassisSource(baseFiles());
     const chassis = await loadChassis(src, 'E46');
-    const ews = await chassis.cabd.forSg('EWS', 0x07);
+    const modules = await chassis.cabd.listModules();
+    expect(modules.map((m) => m.moduleName)).toEqual(['EWS']);
+    const ews = await chassis.cabd.openModule('EWS', 0x07);
     expect(ews.blocks.length).toBeGreaterThan(0);
   });
 });

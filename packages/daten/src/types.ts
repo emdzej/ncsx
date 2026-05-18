@@ -75,9 +75,23 @@ export interface Block {
   rows: RowValues[];
 }
 
+/**
+ * One data row paired with its owning block, in document (file) order. Useful for consumers
+ * that depend on cross-block adjacency in the binary stream — e.g. CABD's
+ * `PARZUWEISUNG_PSW1` rows must follow their parent `PARZUWEISUNG_FSW` row to be paired up.
+ *
+ * `values` is the same object reference held inside `block.rows`; mutating one affects both.
+ */
+export interface OrderedRow {
+  block: Block;
+  values: RowValues;
+}
+
 export interface DatenFile {
   signatures: { type: number; payload: Uint8Array }[];
   blocks: Block[];
+  /** All data rows in document order. Same row objects as `block.rows`. */
+  rowsInOrder: OrderedRow[];
 }
 
 export interface ParseOptions {

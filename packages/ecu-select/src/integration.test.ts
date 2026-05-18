@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { loadChassis, nodeChassisSource } from '@emdzej/ncsx-chassis';
+import { loadChassis } from '@emdzej/ncsx-chassis';
+import { nodeChassisSource } from '@emdzej/ncsx-chassis/node';
 import { faToAsw } from '@emdzej/ncsx-fa-asw';
 import { selectEcus } from './index.js';
 

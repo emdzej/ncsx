@@ -1,0 +1,32 @@
+{
+  "name": "@emdzej/ncsx-options",
+  "version": "0.0.1",
+  "description": "CVT DATEN reader — emits an OptionFunctionList of per-(FSW, PSW) AUFTRAGSAUSDRUCK predicate bytes for friendly UI filtering. Mirrors NCSDummy's Classes/Options/OptionListReader. Spec: ../../docs/ncsdummy-analysis.md §3.3.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/ncsx-daten": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emdzej/coding.git",
+    "directory": "packages/options"
+  }
+}

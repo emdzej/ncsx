@@ -6,11 +6,13 @@ import type { SelectedSg } from '@emdzej/ncsx-ecu-select';
  * One FSW/PSW change. Identified by numeric FSW id (the u16 stored in the CABD
  * `PARZUWEISUNG_FSW` row) and the raw PSW value.
  *
- * If `sgName` is given, only that SG receives the edit. Otherwise every selected SG whose
- * CABD has a matching FSW row gets the edit.
+ * If `sgName` is given, only that SG receives the edit. Match is by either
+ * `SGAUSWAHL.SGNAME` (physical, file basename — e.g. `KMB_E46`) **or**
+ * `SGAUSWAHL.UMRSG` (logical, e.g. `KMB`). Otherwise every selected SG whose CABD
+ * declares a matching FSW row gets the edit.
  */
 export interface CodingEdit {
-  /** Optional: pin this edit to a single SG. */
+  /** Optional: pin this edit to a single SG (physical SGNAME or logical UMRSG). */
   sgName?: string;
   /** Numeric FSW id from the SG's CABD `PARZUWEISUNG_FSW` row. */
   fsw: number;
@@ -36,10 +38,14 @@ export interface PlanCodingOptions {
   /**
    * Pre-existing netto buffer per SG (e.g. what `CODIERDATEN_LESEN` returned). When omitted,
    * each plan starts from a zero-filled buffer sized to fit every PARZUWEISUNG_FSW row's
-   * `WORTADR + BYTEADR`.
+   * `WORTADR + BYTEADR`. Keys can be either physical SGNAME or logical UMRSG.
    */
   initialNetto?: ReadonlyMap<string, Uint8Array>;
-  /** Coding-index hint per SG (passed to `chassis.cabd.forSg(sg, ci)`). */
+  /**
+   * Coding-index override per SG. When provided, this CI is used instead of the one
+   * derived from `SGAUSWAHL.CBD`. Keys can be either physical SGNAME or logical UMRSG.
+   * Typical source: the ECU's own `CODIERINDEX_LESEN` response.
+   */
   codingIndex?: ReadonlyMap<string, number>;
   /** Warning sink. */
   onWarning?: (msg: string) => void;
@@ -48,12 +54,16 @@ export interface PlanCodingOptions {
 export type AppliedEdit = CodingEdit & { rule: CabdRule };
 
 export interface CodingPlan {
-  /** Logical SG short name. */
+  /** Physical SG name (`SGAUSWAHL.SGNAME` — the `.Cxx` file basename). */
   sgName: string;
-  /** SGBD module name (from SGFAM); the first arg to `apiJob`. */
+  /** Logical SG name (`SGAUSWAHL.UMRSG` — matches `SGFAM.SG` and the NCS Expert dropdown). */
+  umrsg: string;
+  /** EDIABAS module name (`SGAUSWAHL.SGBD`); the first arg to `apiJob`. */
   sgbd: string;
-  /** CABD module name (from SGFAM). */
+  /** Logical CABD name (`SGAUSWAHL.CABD`, same as `SGFAM.CABD`). Bookkeeping only. */
   cabd: string;
+  /** Coding-index suffix that was used (`C07` etc.) — the `.Cxx` extension. */
+  cbd: string;
   /** EDIABAS job to invoke. */
   jobName: string;
   /** Final netto byte buffer to ship. */

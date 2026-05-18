@@ -101,7 +101,9 @@ async function readOptionalText<T>(
  * - `BR_REF.DAT` is opened (and aliasing applied) to canonicalise the chassis code.
  * - The five chassis binary tables (DST/SGET/SGVT/ZCSUT/CVT) are read in parallel.
  * - The text companions (SGFAM/ZST/AT/AT.M00/AT.ZUS) are read in parallel.
- * - CABD `.Cxx` files are **not** preloaded; use `chassis.cabd.forSg(sgName, ci?)`.
+ * - CABD `.Cxx` files are **not** preloaded; use `chassis.cabd.listModules()` to
+ *   enumerate them and `chassis.cabd.openModule(basename, ci)` to load one. See
+ *   `docs/ecu-selection.md` §8 for how to derive `(basename, ci)` from a SelectedSg.
  *
  * Missing optional files (anything except `DST.000`) emit a warning and leave the matching
  * field `undefined`. Missing `BR_REF.DAT` or `DST.000` throw.
@@ -165,7 +167,7 @@ export async function loadChassis(
   if (!swtFsw) onWarning({ kind: 'missing-optional', file: `${layout.dir}/SWTFSW*.dat`, message: 'no SWTFSW lookup' });
   if (!swtPsw) onWarning({ kind: 'missing-optional', file: `${layout.dir}/SWTPSW*.dat`, message: 'no SWTPSW lookup' });
 
-  const cabd = new CabdLoader(source, layout.dir, sgfam);
+  const cabd = new CabdLoader(source, layout.dir);
 
   return {
     code,
@@ -190,4 +192,4 @@ export async function loadChassis(
   };
 }
 
-const emptyDaten = (): DatenFile => ({ signatures: [], blocks: [] });
+const emptyDaten = (): DatenFile => ({ signatures: [], blocks: [], rowsInOrder: [] });

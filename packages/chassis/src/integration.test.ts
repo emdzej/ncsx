@@ -27,20 +27,17 @@ const haveSamples = existsSync(DATEN_ROOT);
     expect(w502?.fsws).toContain('SWA');
   });
 
-  it('lazily loads a real CABD .Cxx file for EWS', async () => {
+  it('lazily loads a real CABD .Cxx file via listModules + openModule', async () => {
     const src = nodeChassisSource(DATEN_ROOT);
     const chassis = await loadChassis(src, 'E46');
-    const ews = chassis.sgfam.get('EWS')!;
-    // Pick whichever .Cxx exists by listing the dir.
-    const entries = await src.list(chassis.dir);
-    const candidate = entries.find((e) =>
-      new RegExp(`^${ews.cabd}\\.C[0-9A-F]{2}$`, 'i').test(e),
-    );
-    if (!candidate) return; // shipped install may not have one
-    const ci = parseInt(candidate.slice(-2), 16);
-    const file = await chassis.cabd.forSg('EWS', ci);
+    const modules = await chassis.cabd.listModules();
+    // E46 ships at least EWS (.C81 in practice).
+    const ews = modules.find((m) => m.moduleName.toUpperCase() === 'EWS');
+    if (!ews || ews.codingIndexes.length === 0) return; // shipped install may not have one
+    const ci = ews.codingIndexes[0]!;
+    const file = await chassis.cabd.openModule(ews.moduleName, ci);
     expect(file.blocks.length).toBeGreaterThan(0);
     // Should be cached on repeat call.
-    expect(await chassis.cabd.forSg('EWS', ci)).toBe(file);
+    expect(await chassis.cabd.openModule(ews.moduleName, ci)).toBe(file);
   });
 });

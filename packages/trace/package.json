@@ -1,0 +1,32 @@
+{
+  "name": "@emdzej/ncsx-trace",
+  "version": "0.0.1",
+  "description": "TRC/MAN trace-file readers, writers, and TraceOverlay model — the friendly checkbox editor's data plane. Mirrors NCSDummy's Classes/TraceFunctions. Spec: ../../docs/ncsdummy-analysis.md §2-3, ../../docs/user-flow.md.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/ncsx-function-list": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emdzej/ncsx.git",
+    "directory": "packages/trace"
+  }
+}

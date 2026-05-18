@@ -49,7 +49,7 @@ export function parseDatenFile(buf: Uint8Array, opts: ParseOptions = {}): DatenF
     if (onWarning) onWarning(msg);
   };
 
-  const file: DatenFile = { signatures: [], blocks: [] };
+  const file: DatenFile = { signatures: [], blocks: [], rowsInOrder: [] };
   let currentBlock: Block | null = null;
   let pendingFormat: ReturnType<typeof parseFormatString> | null = null;
   let off = 0;
@@ -143,7 +143,9 @@ export function parseDatenFile(buf: Uint8Array, opts: ParseOptions = {}): DatenF
           );
           break;
         }
-        block.rows.push(readRow(block.fields, frame.payload));
+        const values = readRow(block.fields, frame.payload);
+        block.rows.push(values);
+        file.rowsInOrder.push({ block, values });
       }
     }
 

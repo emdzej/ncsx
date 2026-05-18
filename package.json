@@ -9,7 +9,10 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "ci": "turbo run build lint typecheck test",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "web": "pnpm --filter @emdzej/ncsx-web dev",
+    "web:build": "pnpm --filter @emdzej/ncsx-web build",
+    "web:preview": "pnpm --filter @emdzej/ncsx-web preview"
   },
   "devDependencies": {
     "@eslint/js": "^9.19.0",

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NCSX — BMW coding in the browser</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta
+      name="description"
+      content="BMW NCS Expert coding in the browser — friendly checkbox editor over Web Serial."
+    />
+    <!--
+      Resolve dark-mode preference before the Svelte bundle paints so we don't flash light
+      on a dark-mode browser. v0 only honours the OS preference; a future toggle would
+      read its choice from localStorage here.
+    -->
+    <script>
+      (function () {
+        try {
+          if (
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches
+          ) {
+            document.documentElement.classList.add("dark");
+          }
+        } catch (_) {
+          /* ignore */
+        }
+      })();
+    </script>
+  </head>
+  <body class="h-full bg-base font-mono text-foreground">
+    <div id="app" class="h-full"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

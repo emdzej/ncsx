@@ -18,12 +18,12 @@ const baseRow = (overrides: Partial<RowValues>): RowValues => ({
 
 describe('findParzuweisung', () => {
   it('finds PARZUWEISUNG_FSW by name', () => {
-    const found = findParzuweisung({ signatures: [], blocks: [block([])] });
+    const found = findParzuweisung({ signatures: [], blocks: [block([])], rowsInOrder: [] });
     expect(found?.name).toBe('PARZUWEISUNG_FSW');
   });
 
   it('returns undefined when absent', () => {
-    expect(findParzuweisung({ signatures: [], blocks: [] })).toBeUndefined();
+    expect(findParzuweisung({ signatures: [], blocks: [], rowsInOrder: [] })).toBeUndefined();
   });
 });
 

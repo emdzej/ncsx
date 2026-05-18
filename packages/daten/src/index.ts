@@ -13,6 +13,7 @@ export {
   type FieldShape,
   type FieldValue,
   type KnownFrameType,
+  type OrderedRow,
   type RawBytes,
   type ParseOptions,
   type RowValues,

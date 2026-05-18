@@ -9,6 +9,10 @@
     { "path": "packages/chassis" },
     { "path": "packages/fa-asw" },
     { "path": "packages/ecu-select" },
-    { "path": "packages/coder" }
+    { "path": "packages/coder" },
+    { "path": "packages/function-list" },
+    { "path": "packages/options" },
+    { "path": "packages/trace" },
+    { "path": "packages/translations" }
   ]
 }
