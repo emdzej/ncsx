@@ -7,13 +7,15 @@ IPO scripts run under the `@emdzej/inpax` interpreter — the Kernfunktionen run
 
 Background: [`ipo-usage.md` §4](ipo-usage.md) explains how the bridge works. Short version:
 the IPO emits opcode `0x0D CALLE` with a function name in the constant pool; the
-interpreter resolves the name against a system-function table. In native NCSEXPER the
-table routes to `Cabiger.dll` / `CabiUS.dll`; in ncsx we register TypeScript handlers
-backed by existing packages.
+interpreter resolves the name against an in-process **symbol table inside NCSEXPER.EXE
+itself** — the `Cabiger.dll` / `CabiUS.dll` files only carry localised resource strings,
+not function implementations. In ncsx we register TypeScript handlers in the inpax
+interpreter's system-function table.
 
-The contract is fully specified in
-[`CABI.H`](../../inpa-research-or-wherever-cabi-h-lives) (391 lines, parameter directions
-and types in C-header form). No new reverse-engineering needed.
+The contract is fully specified in `NCSEXPER/SGDAT/CABI.H` (391 lines, parameter
+directions and types in C-header form). The 97 declared externs are the public API; this
+plan adds any extra functions we find by scanning NCSEXPER.EXE's symbol-table strings —
+see §"Inventory delta" at the end.
 
 ## Inventory by group
 
@@ -274,6 +276,73 @@ Deps:
 - `@emdzej/ncsx-chassis`, `@emdzej/ncsx-function-list`, `@emdzej/ncsx-trace`,
   `@emdzej/ncsx-cabd`, `@emdzej/ncsx-coder`, `@emdzej/ncsx-fa-asw`, `@emdzej/ncsx-options`
 - Workspace-internal; no new external deps.
+
+## Inventory delta — CDH symbols found in NCSEXPER.EXE that are **not** in `CABI.H`
+
+Walking NCSEXPER.EXE's trace-string section (`0x005af*` … `0x005b1*`) surfaces ~23
+additional `CDH*` symbols beyond the 97 declared in `CABI.H`. None of them appear in the
+public header, and a `strings` sweep across every shipped `.ipo` (NCSEXPER `SGDAT/` +
+INPA `SGDAT/`) confirms that **shipped scripts don't call any of these** — only
+`CDHapiResultSets` (which is in `CABI.H`) is referenced by name. Everything else IPOs
+need they get via `api*` (EDIABAS) directly.
+
+So these are NCSEXPER-internal COAPI helpers, not part of the public IPO surface. We
+list them here for completeness; **we don't need to implement them for Phase 9** unless
+a community script ends up using one (in which case the inpax interpreter will surface
+the missing-symbol error and we can fill it in then).
+
+| Symbol                          | Likely role                                                |
+|---------------------------------|------------------------------------------------------------|
+| `CDHGetCabdName`                | Get currently-loaded CABD name (used by COAPI internally)  |
+| `CDHGetSgbdName` (duplicate)    | Already in CABI.H — same symbol                            |
+| `CDHGetVmZcsProgName`           | Get VM (variant module) ZCS program name                   |
+| `CDHGetVmGerName`               | Get VM-Gerät (variant module device) name                  |
+| `CDHGetCodierBaureihe`          | Get the coding-target chassis (BR)                         |
+| `CDHSetBaureihe`                | Set the active chassis from C++ code                       |
+| `CDHSaveTmpFswPswList`          | Temp/scratch save (alongside the public `CDHSaveFswPswList`) |
+| `CDHRestoreTmpFswPswList`       | Temp/scratch restore                                       |
+| `CDHIntInit`                    | Internal: ZUT/VFP "integration" subsystem init             |
+| `CDHIntSetMode`                 | Internal: integration mode setter                          |
+| `CDHIntSetScriptFile`           | Internal: integration script file setter                   |
+| `CDHIntTrigger`                 | Internal: integration trigger                              |
+| `CDHSetNettoData`               | Direct netto-buffer setter                                 |
+| `CDHSetNettoMaskData`           | Direct netto+mask setter                                   |
+| `CDHGetNettoData`               | Direct netto-buffer getter                                 |
+| `CDHGetReferenzDaten`           | Get reference dataset                                      |
+| `CDHGetReferenzProgramm`        | Get reference program                                      |
+| `CDHBinBufWrite`                | Generic bin-buffer write (vs `WriteByte` / `WriteWord` in CABI.H) |
+| `CDHBinBufRead`                 | Generic bin-buffer read                                    |
+| `CDHBinBufReadAt`               | Read at a specific position                                |
+| `CDHBinBufSize`                 | Get buffer size                                            |
+| `CDHBinBufAppend`               | Append bytes                                               |
+| `CDHBinBufCopy`                 | Copy buffer                                                |
+| `CDHApiInit` (Pascal-cased)     | Likely a duplicate symbol or alias for the public `CDHapiInit` (the only case-collision in the trace strings) |
+
+### How we'll handle these in `inpax-cabi-provider`
+
+The system-function table will throw `UnknownFunction("…")` if an IPO calls one of these.
+For Phase 9 v1 we accept that and let the user file an issue. If a real script needs
+one, we add a binding in a follow-up — by that point the implementation is usually
+trivial (`CDHGetCabdName` is one line, `CDHGetNettoData` is `overlay.netto`, etc.).
+
+A pragmatic shortcut: register a single fallback `(name, ctx) => { logUnimplemented(name); return null; }` adapter for the whole "internal CDH*" namespace so scripts limp along
+instead of hard-failing. That way unsupported calls become warning lines in the log
+rather than crashes.
+
+### Where `api*` actually lives
+
+The public `api*` family (`apiInit`, `apiJob`, …) in `CABI.H` resolves at runtime to
+`api32.dll` exports — strings like `___apiResultChar@16`, `___apiResultByte@16`, …
+appear at `0x005feb*` in NCSEXPER.EXE's `.idata`, which is the standard PE import-table
+pattern for `__stdcall` symbols from another DLL. So:
+
+- `CDH*` functions — implementations inside NCSEXPER.EXE itself.
+- `api*` functions — re-exported by NCSEXPER.EXE but ultimately implemented in
+  `api32.dll` (BMW's EDIABAS API library).
+
+For ncsx, both groups land in our binding via `@emdzej/ediabasx` (api*) and the ncsx
+packages (CDH*). The DLL boundary doesn't affect our TS shape — we register handlers
+under both name spellings.
 
 ## Testing strategy
 
