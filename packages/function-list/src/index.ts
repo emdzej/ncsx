@@ -1,4 +1,5 @@
 export { buildFunctionList } from './builder.js';
+export { applyPswToNetto, decodeCurrentPsw } from './decode.js';
 export {
   FunctionListError,
   type FunctionItem,

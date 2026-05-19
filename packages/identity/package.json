@@ -1,7 +1,7 @@
 {
-  "name": "@emdzej/ncsx-pfl",
+  "name": "@emdzej/ncsx-identity",
   "version": "0.0.1",
-  "description": "Parser/serializer for NCSEXPER .pfl profile files. Spec: ../../docs/pfl-format.md",
+  "description": "Read VIN / FA / ZCS from a connected BMW ECU. Picks the right identity SG per chassis using SGFAM's FA/ZCS flags (no hardcoded chassis tables).",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -15,7 +15,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@emdzej/inpax-ini-parser": "^0.5.0"
+    "@emdzej/ncsx-wire": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",
@@ -27,6 +27,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/emdzej/ncsx.git",
-    "directory": "packages/pfl"
+    "directory": "packages/identity"
   }
 }

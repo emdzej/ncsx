@@ -13,6 +13,10 @@
     { "path": "packages/function-list" },
     { "path": "packages/options" },
     { "path": "packages/trace" },
-    { "path": "packages/translations" }
+    { "path": "packages/translations" },
+    { "path": "packages/property-formulas" },
+    { "path": "packages/wire" },
+    { "path": "packages/identity" },
+    { "path": "packages/inpax-cabi-provider" }
   ]
 }

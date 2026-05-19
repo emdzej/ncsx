@@ -27,6 +27,15 @@ export default [
     },
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',
+      // `_`-prefixed args are intentional in stub/scaffold code (e.g.
+      // packages/inpax-cabi-provider declares the full CABI surface up front;
+      // most signatures land in the unimplemented branch until they're built
+      // out one-by-one). The `_` prefix is the canonical TS marker for
+      // "intentionally unused"; without this opt-in eslint flags every stub.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
     },
   },
 ];

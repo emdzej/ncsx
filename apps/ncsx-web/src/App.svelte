@@ -7,6 +7,8 @@
   import ModuleList from "./components/ModuleList.svelte";
   import FunctionTree from "./components/FunctionTree.svelte";
   import ErrorBanner from "./components/ErrorBanner.svelte";
+  import ConnectButton from "./components/ConnectButton.svelte";
+  import SettingsDialog from "./components/SettingsDialog.svelte";
 
   // Load the community-maintained translation dictionary on app boot. Vite serves
   // `/translations.csv` from `apps/ncsx-web/public/`. The CSV is ~1 MB but parses in
@@ -26,7 +28,9 @@
     app.view = app.install ? "browse-chassis" : "picker";
     app.chassis = null;
     app.selectedSg = null;
+    app.selectedModule = null;
     app.functionList = null;
+    app.lastReadNetto = null;
   }
 </script>
 
@@ -54,6 +58,14 @@
           {app.install.root.name}
         </span>
       {/if}
+      <button
+        class="rounded border border-divider bg-surface px-2 py-0.5 text-xs text-muted transition hover:border-accent hover:bg-elevated"
+        onclick={() => (app.showSettings = true)}
+        title="Configure interface, serial parameters, gateway URL"
+      >
+        Settings
+      </button>
+      <ConnectButton />
     </header>
   {/if}
 
@@ -70,4 +82,5 @@
   </main>
 
   <ErrorBanner />
+  <SettingsDialog />
 </div>

@@ -1,7 +1,7 @@
 {
-  "name": "@emdzej/ncsx-pfl",
+  "name": "@emdzej/ncsx-inpax-cabi-provider",
   "version": "0.0.1",
-  "description": "Parser/serializer for NCSEXPER .pfl profile files. Spec: ../../docs/pfl-format.md",
+  "description": "CABI/CDH bridge for the inpax IPO interpreter — implements the 80+ CDH* functions NCSEXPER's A_*.ipo dispatchers call (statically linked in NCSEXPER.EXE). Signatures from CABI.H, behaviour ghidra-verified per docs/assumptions.md.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -15,7 +15,8 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@emdzej/inpax-ini-parser": "^0.5.0"
+    "@emdzej/ncsx-chassis": "workspace:*",
+    "@emdzej/ncsx-wire": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",
@@ -27,6 +28,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/emdzej/ncsx.git",
-    "directory": "packages/pfl"
+    "directory": "packages/inpax-cabi-provider"
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseZst, type SgfamRow, type AtRecord } from '@emdzej/ncsx-text-tables';
-import { indexAt, indexSgfam, indexZst } from './indexes.js';
+import { findSgsByFlag, indexAt, indexSgfam, indexZst } from './indexes.js';
 
 describe('indexSgfam', () => {
   it('keys rows by SG short-name', () => {
@@ -38,5 +38,28 @@ describe('indexAt', () => {
     const map = indexAt(records);
     expect(map.get('502')!.fsws).toEqual(['SWA']);
     expect(map.get('524')!.fsws).toEqual(['ALC', 'XENON']);
+  });
+});
+
+describe('findSgsByFlag', () => {
+  const sgfam = indexSgfam([
+    { sgName: 'AKMB', cabd: 'A_AKMB46', sgbd: 'C_KMB46', zcs: 0, fa: 1, comment: '' },
+    { sgName: 'EWS', cabd: 'A_EWS3', sgbd: 'C_EWS3', zcs: 1, fa: 0, comment: '' },
+    { sgName: 'KMB', cabd: 'A_KMB46', sgbd: 'C_KMB46', zcs: 1, fa: 0, comment: '' },
+  ]);
+
+  it('returns the FA-master SGs (E46: AKMB only)', () => {
+    expect(findSgsByFlag(sgfam, 'fa').map((r) => r.sgName)).toEqual(['AKMB']);
+  });
+
+  it('returns every ZCS-master (E46 has multiple)', () => {
+    expect(findSgsByFlag(sgfam, 'zcs').map((r) => r.sgName).sort()).toEqual(['EWS', 'KMB']);
+  });
+
+  it('returns an empty array when no SG carries the flag', () => {
+    const empty = indexSgfam([
+      { sgName: 'X', cabd: 'A_X', sgbd: 'C_X', zcs: 0, fa: 0, comment: '' },
+    ]);
+    expect(findSgsByFlag(empty, 'fa')).toEqual([]);
   });
 });

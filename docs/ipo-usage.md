@@ -6,11 +6,68 @@ Three questions, short answers first, then evidence.
 
 | Path                                                  | Uses IPO? |
 |-------------------------------------------------------|-----------|
-| Coding (`SG_CODIEREN`, `CODIERDATEN_LESEN`, `CODIERDATEN_SCHREIBEN`) | **No.** COAPI/CDH builds the netto buffer and calls `api32.dll::apiJob` directly. |
+| **Coding & identity** (`SG_CODIEREN`, `CODIERDATEN_LESEN`, `CODIERDATEN_SCHREIBEN`, `FGNR_LESEN`, `FA_LESEN`, `ZCS_LESEN`, `SG_IDENT`, `CODIERINDEX_LESEN`, …) | **Yes.** Routed through the per-CABD `A_*.ipo` script (e.g. `A_KMB46.ipo`). `cabimain` switches on the job name and calls handler functions like `Cod`, `Lesen`, `FgnrLesen`, `ZcsLesen`, `Ident`, `CILesen`. The handlers issue EDIABAS work through the CDH* bridge into `api32.dll`. |
 | Kernfunktionen menu (`[CODING].FktKernfunktionen=1` / `[INDIVID].FktKernfunktionen=1`) | **Yes.** The selected Kernfunktion loads the matching `SGDAT/*.ipo` and runs it under NCSEXPER's embedded IPO interpreter. |
 | `.ssd` / ZUT verifier | **No.** Different format — record-tag-driven (see [`ssd-zut-format.md`](ssd-zut-format.md)). |
 
-NCSEXPER's `.text` segment carries a **full embedded IPO interpreter** (TEST-Infotext loader, the INPA system-function table, opcode dispatcher — confirmed by `__inpa_startup__`, `__inpa_shutdown__`, `INPA Bridge16 Window`, `INPA Return Window`, `INPA-PrintScreen_%05d` strings in `.rdata`). It runs the same `.ipo` files INPA itself runs (same `TEST-Infotext` header — see [`inpax/docs/ipo-file-structure.md`](../../inpax/docs/ipo-file-structure.md)), but **only for interactive diagnostics**. The coding pipeline never enters the interpreter.
+> **Doc history note.** An earlier version of this table claimed coding "doesn't use IPO — COAPI calls apiJob directly". That was wrong, and disassembly of `A_KMB46.ipo` (2026-05-19) corrects it. The misreading came from over-weighting one paragraph in the original ghidra notes; the actual evidence (the IPO's `cabimain` switch + `Cod`/`Lesen` handlers) is unambiguous.
+
+NCSEXPER's `.text` segment carries a **full embedded IPO interpreter** (TEST-Infotext loader, the INPA system-function table, opcode dispatcher — confirmed by `__inpa_startup__`, `__inpa_shutdown__`, `INPA Bridge16 Window`, `INPA Return Window`, `INPA-PrintScreen_%05d` strings in `.rdata`). It runs the same `.ipo` files INPA itself runs (same `TEST-Infotext` header — see [`inpax/docs/ipo-file-structure.md`](../../inpax/docs/ipo-file-structure.md)). Both NCSEXPER's MFC main-screen coding flow **and** the Kernfunktionen menu pass through this interpreter.
+
+### The CABI-style A_*.ipo dispatcher
+
+The per-CABD-module script (e.g. `A_KMB46.ipo` for the KMB cluster on E46) is the workhorse. Inpax CLI disassembly confirms the shape — `cabimain` is a job-name switch:
+
+```
+local[0] := JOBNAME (passed by NCSEXPER's MFC UI)
+if JOBNAME == "JOB_ERMITTELN"      → call Jobs        (emits the protocol-header job list)
+if JOBNAME == "INFO"               → call InfoJob
+if JOBNAME == "CODIERINDEX_LESEN"  → setjobstatus + call CILesen
+if JOBNAME in (SG_CODIEREN | TEILBEREICH_CODIEREN | FGNR_SCHREIBEN | ZCS_SCHREIBEN | ZCS_LOESCHEN)
+                                    → setjobstatus + call Cod(JOBNAME)
+if JOBNAME == "CODIERDATEN_LESEN"  → setjobstatus + call Lesen
+if JOBNAME == "FGNR_LESEN"         → setjobstatus + call FgnrLesen
+if JOBNAME == "ZCS_LESEN"          → setjobstatus + call ZcsLesen
+if JOBNAME == "NETTODATEN_SCHREIBEN" → setjobstatus + call NettoDat
+if JOBNAME == "SG_IDENT"           → setjobstatus + call Ident
+```
+
+The handlers do more than just call `apiJob`. `Lesen` (146 ops) writes to the protocol report (`PEMProtokollAusgabe`), checks CDH error state (`TestCDHFehler`), updates UI (`digitalout`), drives a state machine (`setstate`, `setjobstatus`), and even `scriptchange`s into another IPO (e.g. `"ID_COD_INDEX"`) for coding-index resolution. The actual EDIABAS work goes through CDH* functions statically linked into NCSEXPER.EXE — see §4.
+
+**The "Change Job" dropdown source.** The IPO's `Jobs` function emits the JOB[1]..JOB[N] strings into the PEM report (`PEMSGZ_Kopfzeile`). NCSEXPER's MFC UI reads that list to populate the "Change Job" modal. So the dropdown contents are per-CABD-module, sourced from the IPO itself — not from EDIABAS SGBD job-table reflection.
+
+### No entry-point IPO
+
+Unlike INPA.EXE, NCSEXPER.EXE has **no startup IPO**. Evidence:
+
+- `NCSEXPER/CFGDAT/` contains only `COAPI.INI`, `INPA.INI`, locale `.eng`/`.ger` strings, and `.TXT` files. No `.ipo` files anywhere outside `SGDAT/`.
+- `strings NCSEXPER.EXE | grep -c '\.ipo'` returns **2** — both are the bare extensions `.ipo` / `.IPO`, used to append to a basename constructed at runtime from SGAUSWAHL data.
+- The `.exe` is dense in MFC class strings: `CDialog`, `CFormView`, `CMFCStatusBar`, `CMFCMenuBar`, `CMFCPopupMenu`, `CMFCToolBar`, `CMFCRibbonBar`, `CMFCVisualManager*`. The main UI is a full MFC application.
+
+**INPA.EXE is the opposite shape.** Its CFGDAT contains `startus.ipo` / `startger.ipo` (locale variants) whose `inpainit` function paints the main menu via `setmenu`/`setscreen` syscalls. INPA's main UI is genuinely IPO-driven; NCSEXPER's isn't.
+
+For NCSEXPER, IPOs are entered **only at job-execute time** — never at startup, never for the chassis/ECU/job pickers themselves. The flow is:
+
+```
+WinMain (MFC) → main dialog → user picks ECU + job → "Execute job" click
+  ↓
+NCSEXPER loads A_<cabd>.ipo from SGDAT (basename from the SGAUSWAHL row)
+Embedded interpreter runs cabimain(JOBNAME)
+  → switch on JOBNAME → calls handler (Lesen, Cod, FgnrLesen, ZcsLesen, Ident, …)
+  → handler calls CDH* (statically linked into NCSEXPER.EXE)
+  → CDH* calls api32.dll::apiJob → SGBD (.prg) → ECU
+```
+
+### What this means for ncsx
+
+Our current `wire.applyCodingPlan` calls `apiJob(SGBD, "SG_CODIEREN", hex)` directly. The bytes on the wire are identical to what NCSEXPER's `A_*.ipo::Cod` handler produces, so the SG accepts both. What we lose by bypassing the IPO:
+
+- Protocol-report writes (`PEM*`) — we don't need these; equivalent to the TRC files we already chose to skip.
+- UI feedback inside the IPO (`digitalout`, `infobox`) — we have our own UI.
+- Error-recovery state machine (`TestCDHFehler`, `TestApiFehler`) — minor; the EDIABAS `JOB_STATUS` is the same signal.
+- Multi-step orchestration (`scriptchange` chains, e.g. CODIERDATEN_LESEN → ID_COD_INDEX) — **this can matter** for SGs that gate reads on auth/CI lookups.
+
+For full NCS-faithful behaviour we need to **run the IPO via the inpax interpreter** plus a CABI binding layer that resolves CDH* into ncsx packages. See `cabi-binding-plan.md` (planned) for the per-function mapping. Until then, direct `apiJob` is good enough for single-PSW edits but will hit limits on more complex coding modes.
 
 ### Two IPO flavours in `SGDAT/`
 
@@ -26,6 +83,32 @@ entry points (`cabimain`/`cabiexit`) and its calls to `CDH*` / `apiJob` function
 resolved through the **external-DLL bridge** described in §4 — they do not import from
 another `.ipo` file. There is no IPO-to-IPO import mechanism; cross-script transfer only
 happens via `scriptchange` / `scriptselect` (whole-script replace).
+
+### Inventory — what's actually in `SGDAT/`
+
+`NCSEXPER/SGDAT/` ships **1,798 `.ipo` files** (counted on a current install). The same
+directory is shared verbatim with INPA (`INPA/SGDAT/` is the same set, often a symlink
+or sync target — file counts match exactly). The IPOs split into four naming buckets,
+roughly:
+
+| Pattern         | Count | Style       | What it is                                                |
+|-----------------|------:|-------------|-----------------------------------------------------------|
+| `A_*.ipo`       |   168 | CABI-style  | Per-CABD-module batch dispatchers (e.g. `A_KMB46.ipo`).   |
+| `D_*.ipo`       |   240 | INPA-style  | Per-diagnose-group interactive scripts (`D_KFS.ipo`, …).  |
+| Digit-prefix    |   713 | CABI-style  | Part-number / EK-job-keyed batch scripts (`00EK9272.ipo`, `001MVD1722.ipo`, `00MDS410.ipo`). |
+| Functional name | 1,081 | INPA-style  | Subsystem diagnostics named by what they do (`abs_uc.ipo`, `airbag.ipo`, `acc.ipo`, `afs_read.ipo`). |
+
+**Zero `C_*.ipo` files.** This trips people up: `C_KMB46` is an SGBD basename, but
+SGBDs are compiled BEST/2 bytecode and live in `EDIABAS/Ecu/` as `.prg` files. They are
+read by `api32.dll`'s interpreter, not by NCSEXPER's IPO interpreter. The two interpreters
+share zero code and run on different bytecodes; the name overlap is purely
+chassis-vocabulary coincidence.
+
+**None of these 1,798 files drive the main NCSEXPER screens.** They're all behind the
+**Basic-Functions** (Kernfunktionen) button — when the user clicks one, NCSEXPER's
+embedded IPO interpreter loads the matching file, opens an "INPA Bridge16 Window" child
+window, and runs the script inside it (see §3). The main coding flow
+(`SG_CODIEREN` / `CODIERDATEN_LESEN`) never touches any of them.
 
 ## 2. Syscalls the IPOs make
 
@@ -175,8 +258,10 @@ package mapping in [`cabi-binding-plan.md`](cabi-binding-plan.md).
 
 ## TL;DR
 
-- IPOs aren't on the **coding** hot path; COAPI calls `apiJob` directly.
-- IPOs power the **Kernfunktionen** menu (diagnostic jobs and live data).
+- IPOs **are** the coding hot path. The per-CABD `A_*.ipo` (e.g. `A_KMB46.ipo`) is loaded by NCSEXPER's embedded interpreter and its `cabimain` switch dispatches every coding/identity job (`Cod`, `Lesen`, `FgnrLesen`, `ZcsLesen`, `NettoDat`, `Ident`, `CILesen`, `InfoJob`) to a handler that calls the CDH* bridge → `apiJob`.
+- The **"Change Job" dropdown contents come from the IPO**'s `Jobs` function, not from SGBD job-table reflection.
+- IPOs also power the **Kernfunktionen** menu (diagnostic jobs and live data) — same interpreter, different IPO files (functional-named, not `A_*`).
+- `SGDAT/` holds **1,798 IPOs** in four buckets (`A_*` / `D_*` / digit-prefix / functional name) — zero `C_*.ipo` files because SGBDs live in `EDIABAS/Ecu/` as `.prg`.
 - Two styles of IPO live in `SGDAT/`: CABI-style (`cabimain`/`cabiexit`) for batch job dispatch, INPA-style (`inpainit`/`inpaexit`) for interactive screens.
 - All IPOs use the same INPA UI syscalls (`setscreen`, `setmenu`, `userbox*`, gauges) plus EDIABAS bridge calls (`INPAapiJob`, `INPAapiResult*`) and the PEM print-output API.
 - NCSEXPER **embeds the full INPA UI runtime** to make these syscalls work — confirmed by the linked-in window-class strings and the embedded interpreter's function table.

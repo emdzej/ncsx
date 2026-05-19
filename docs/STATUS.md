@@ -2,6 +2,13 @@
 
 Last updated: commit `ddd67b4` (Nov 2025).
 
+> **Architectural assumptions** ncsx is currently built on: see [`assumptions.md`](assumptions.md).
+> Read that first if you're new — covers IPO scope, FA/ZCS handling, SGAUSWAHL resolution.
+>
+> **The full NCS Expert ↔ IPO ↔ CABI ↔ EDIABAS call architecture** (it's wild):
+> [`call-architecture.md`](call-architecture.md). Required reading before touching
+> packages/wire or packages/inpax-cabi-provider.
+
 ## TL;DR
 
 Reverse-engineering of BMW **NCSEXPER 4.0.1** is **functionally complete**.

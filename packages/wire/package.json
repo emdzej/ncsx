@@ -1,7 +1,7 @@
 {
-  "name": "@emdzej/ncsx-pfl",
+  "name": "@emdzej/ncsx-wire",
   "version": "0.0.1",
-  "description": "Parser/serializer for NCSEXPER .pfl profile files. Spec: ../../docs/pfl-format.md",
+  "description": "Wire layer between ncsx's CodingPlan / TraceOverlay and EDIABAS (@emdzej/ediabasx-ediabas). Read/write SG netto buffers over Web Serial.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -15,7 +15,8 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@emdzej/inpax-ini-parser": "^0.5.0"
+    "@emdzej/ediabasx-ediabas": "^0.2.1",
+    "@emdzej/ncsx-coder": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",
@@ -27,6 +28,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/emdzej/ncsx.git",
-    "directory": "packages/pfl"
+    "directory": "packages/wire"
   }
 }

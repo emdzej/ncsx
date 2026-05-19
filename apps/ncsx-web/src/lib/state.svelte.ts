@@ -1,7 +1,41 @@
 import type { Chassis } from "@emdzej/ncsx-chassis";
 import type { FunctionList } from "@emdzej/ncsx-function-list";
+import type { ZcsRead } from "@emdzej/ncsx-identity";
+import type { SgfamRow } from "@emdzej/ncsx-text-tables";
 import type { TranslationFile } from "@emdzej/ncsx-translations";
+import { loadConfig, type WebConfig } from "./config";
 import type { NcsxInstall } from "./daten-install";
+
+/**
+ * Result of reading the chassis-identity payload from a user-picked SG. FA and ZCS are
+ * **structurally different** even though they encode the same information:
+ *
+ * - **FA** (post-E60-ish) is a single token string the SG hands back verbatim:
+ *   `E46_#0306&N6SW%0354$167$1CA$205…`. Editing it = appending / removing tokens.
+ * - **ZCS** (pre-FA chassis: E36/E38/E39/E46/E53) is **three fields** — `GM`
+ *   (base-model code), `SA` (a hex-encoded bit-set indexed by `<BR>ZST.*`), `VN`
+ *   (version-number). NCS Expert exposes them in the "Enter ZCS" dialog as separate
+ *   text inputs; editing the bit-set means toggling bits per ZST.
+ *
+ * Exactly one of `fa` / `zcs` is populated per read — whichever the source SG carries.
+ * VIN comes through on both paths (read separately via `FGNR_LESEN`).
+ */
+export interface VehicleIdentity {
+  /** SGFAM row the user picked (sgName / sgbd / cabd / fa / zcs flags). */
+  source: SgfamRow;
+  /** 17-character VIN string, or undefined when the SG didn't return one. */
+  vin?: string;
+  /** FA token string (FA-master SGs). */
+  fa?: string;
+  /** Structured ZCS payload (ZCS-master SGs). Raw bytes + GM/VN/coding-index. */
+  zcs?: ZcsRead;
+  /** Per-job JOB_STATUS (`OKAY` on success). */
+  vinStatus?: string;
+  faStatus?: string;
+  zcsStatus?: string;
+  /** EDIABAS-layer error text if all jobs failed entirely. */
+  error?: string;
+}
 
 /**
  * Top-level UI states. `picker` is the landing screen; `browse-chassis` once an install
@@ -14,12 +48,46 @@ export type AppView =
   | "browse-modules"
   | "view-module";
 
+/**
+ * Per-module ECU coordinates. Populated when the user picks a `.Cxx` from `ModuleList`,
+ * so the `FunctionTree` knows which SGBD to talk to when reading from the bus and which
+ * UMRSG to surface as the logical SG label.
+ */
+export interface SelectedModule {
+  /** Physical SGNAME = `.Cxx` file basename (e.g. `KMB_E46`). */
+  moduleName: string;
+  /** Coding index byte (e.g. `0x06`). */
+  codingIndex: number;
+  /** EDIABAS module name to feed to `apiJob(sgbd, …)`. Picked from SGAUSWAHL. */
+  sgbd: string | null;
+  /** Logical SG (e.g. `KMB`); null if no matching SGAUSWAHL row was found. */
+  umrsg: string | null;
+}
+
 interface AppState {
   view: AppView;
+  /** Persisted connection / interface config (interface type, baud, timeouts, …). */
+  config: WebConfig;
+  /** Whether the Settings dialog is open. */
+  showSettings: boolean;
   install: NcsxInstall | null;
   chassis: Chassis | null;
+  /** Display label of the currently-viewed module (formatted as `KMB_E46.C06`). */
   selectedSg: string | null;
+  /** Structured info for the currently-viewed module; null between picks. */
+  selectedModule: SelectedModule | null;
   functionList: FunctionList | null;
+  /**
+   * VIN + FA read from a user-picked identity ECU (FA-master per SGFAM). Drives the
+   * header display and feeds the upcoming FA/ZCS editors. Cleared on chassis change.
+   */
+  identity: VehicleIdentity | null;
+  /**
+   * Last `CODIERDATEN_LESEN` result for the currently-viewed module, keyed by SGNAME. UI
+   * surfaces this as the "current coding" hex dump and feeds it into future planCoding
+   * calls as `initialNetto`.
+   */
+  lastReadNetto: Uint8Array | null;
   /**
    * Community-maintained NCSDummy-style keyword→English dictionary. Loaded once on app
    * startup from `/translations.csv`; null until the fetch settles. UI components fall
@@ -36,10 +104,15 @@ interface AppState {
  */
 export const app: AppState = $state({
   view: "picker",
+  config: loadConfig(),
+  showSettings: false,
   install: null,
   chassis: null,
   selectedSg: null,
+  selectedModule: null,
   functionList: null,
+  identity: null,
+  lastReadNetto: null,
   translations: null,
   error: null,
   busy: false,

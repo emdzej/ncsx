@@ -46,3 +46,23 @@ export function indexAt(records: readonly AtRecord[]): Map<string, AtRecord> {
   for (const rec of records) out.set(rec.code, rec);
   return out;
 }
+
+/**
+ * SGFAM rows whose `fa`/`zcs` flag is set. Use this to discover which SG on the chassis
+ * carries the vehicle-identity payload (FA-master) or ZCS payload (ZCS-master) without
+ * hardcoding a per-chassis table — NCSEXPER itself reads the same flags out of SGFAM.
+ *
+ * Most chassis have exactly one FA-master, but pre-FA chassis (E36/E38/E39/E46/E53) have
+ * several ZCS-masters working together. Callers should be prepared for `[]` (warn — no
+ * row carries the flag) or `[row, row, …]`.
+ */
+export function findSgsByFlag(
+  sgfam: Map<string, SgfamRow>,
+  flag: 'fa' | 'zcs',
+): SgfamRow[] {
+  const out: SgfamRow[] = [];
+  for (const row of sgfam.values()) {
+    if (row[flag] === 1) out.push(row);
+  }
+  return out;
+}

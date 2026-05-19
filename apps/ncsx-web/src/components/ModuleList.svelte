@@ -3,6 +3,7 @@
   import { buildFunctionList } from "@emdzej/ncsx-function-list";
   import type { CabdModule } from "@emdzej/ncsx-chassis";
   import { app } from "../lib/state.svelte";
+  import IdentityPanel from "./IdentityPanel.svelte";
 
   let filter = $state("");
   let modules = $state<CabdModule[]>([]);
@@ -30,6 +31,30 @@
           out.set(physical, set);
         }
         set.add(logical);
+      }
+    }
+    return out;
+  });
+
+  /**
+   * Reverse-index from on-disk SGNAME → EDIABAS SGBD column. Used when launching a
+   * read/write job against the cable: we need to know which SGBD to talk to. Multiple
+   * (SGNAME, CBD) rows can map to different SGBDs (e.g. KMB_E46 uses `C_KMB46` for
+   * older CIs and `KOMBI46R` for newer); when we open a specific .Cxx we'll pick the
+   * SGBD whose row matched its CBD column.
+   */
+  const sgbdByPhysicalAndCi = $derived.by(() => {
+    const out = new Map<string, string>();
+    const sget = app.chassis?.sget;
+    if (!sget) return out;
+    for (const block of sget.blocks) {
+      if (!block.name.startsWith("SGAUSWAHL_")) continue;
+      for (const row of block.rows) {
+        const physical = String(row.SGNAME ?? "");
+        const cbd = String(row.CBD ?? "");
+        const sgbd = String(row.SGBD ?? "");
+        if (!physical || !cbd || !sgbd) continue;
+        out.set(`${physical}.${cbd}`, sgbd);
       }
     }
     return out;
@@ -76,8 +101,17 @@
           psw: app.chassis.swtPsw?.byKeyId,
         },
       });
+      const ciLabel = `C${ci.toString(16).toUpperCase().padStart(2, "0")}`;
+      const umrsgs = umrsgByPhysicalSg.get(moduleName);
       app.functionList = list;
-      app.selectedSg = `${moduleName}.C${ci.toString(16).toUpperCase().padStart(2, "0")}`;
+      app.selectedSg = `${moduleName}.${ciLabel}`;
+      app.selectedModule = {
+        moduleName,
+        codingIndex: ci,
+        sgbd: sgbdByPhysicalAndCi.get(`${moduleName}.${ciLabel}`) ?? null,
+        umrsg: umrsgs ? [...umrsgs][0] ?? null : null,
+      };
+      app.lastReadNetto = null;
       app.view = "view-module";
     } catch (err) {
       app.error = err instanceof Error ? err.message : String(err);
@@ -88,6 +122,7 @@
 
   function back(): void {
     app.chassis = null;
+    app.identity = null;
     app.view = "browse-chassis";
   }
 
@@ -114,6 +149,10 @@
       0,
     )} `.C??` files on disk).
   </p>
+
+  <div class="mb-4">
+    <IdentityPanel />
+  </div>
 
   <input
     type="search"
