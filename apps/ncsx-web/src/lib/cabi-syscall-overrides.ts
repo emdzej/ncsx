@@ -44,19 +44,6 @@ import {
   ValueType,
   type StackEntry,
 } from "@emdzej/inpax-core";
-
-/**
- * inpax's `opAlloc` maps the IPO ALLOC type marker `0x53` to
- * `ValueType.Long` (default `0`). NCSEXPER's compiler emits `0x53` for
- * **String** (default `""`). So a freshly-ALLOCed "string" local
- * arrives at our overrides as `{type: Long, value: 0}` — naive
- * `popString()` returns `"0"` and downstream EDIABAS calls hit
- * "SGBD not found: 0". Recognise the divergence: when CABI.H expects
- * a string and we see a numeric-zero entry, treat it as `""`.
- *
- * This also covers the symmetric case for `in: int` params that arrive
- * as String "" — coerce to 0.
- */
 import {
   NCSEXPER_CABI_SLOTS,
   type CabiParam,
@@ -92,52 +79,17 @@ function popArgs(
   for (let i = params.length - 1; i >= 0; i--) {
     const param = params[i];
     if (param.direction === "in") {
-      const entry = ctx.stack.pop();
-      out[param.name] = coerceIn(entry, param.type);
+      switch (param.type) {
+        case "string": out[param.name] = ctx.popString(); break;
+        case "int":    out[param.name] = ctx.popInt(); break;
+        case "real":   out[param.name] = ctx.popReal(); break;
+        case "bool":   out[param.name] = ctx.popBool(); break;
+      }
     } else {
       out[param.name] = ctx.popRef();
     }
   }
   return out;
-}
-
-/**
- * Coerce a stack entry to the CABI.H-declared param type, tolerating
- * inpax's `0x53 → Long` mismap of NCSEXPER's String type marker (and
- * symmetric cases). A `Long 0` arriving where CABI.H wants a string
- * becomes `""`; a `String ""` arriving where CABI.H wants an int
- * becomes `0`.
- */
-function coerceIn(entry: StackEntry, type: CabiParam["type"]): string | number | boolean {
-  const v = entry.value;
-  const t = entry.type;
-  switch (type) {
-    case "string":
-      if (t === ValueType.String) return String(v ?? "");
-      // Non-string entry: numeric 0 / null / false → "" (uninitialised
-      // string local from ALLOC 0x53). Anything else stringifies.
-      if (v === null || v === 0 || v === false) return "";
-      return String(v);
-    case "int":
-      if (typeof v === "number") return v | 0;
-      if (typeof v === "boolean") return v ? 1 : 0;
-      if (typeof v === "string" && v.length > 0) {
-        const n = Number(v);
-        return Number.isFinite(n) ? n | 0 : 0;
-      }
-      return 0;
-    case "real":
-      if (typeof v === "number") return v;
-      if (typeof v === "boolean") return v ? 1 : 0;
-      if (typeof v === "string" && v.length > 0) {
-        const n = Number(v);
-        return Number.isFinite(n) ? n : 0;
-      }
-      return 0;
-    case "bool":
-      if (typeof v === "boolean") return v;
-      return Boolean(v);
-  }
 }
 
 function writeOut(

@@ -48,29 +48,29 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1
       '@emdzej/inpax-core':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
       '@emdzej/inpax-dispatcher':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
       '@emdzej/inpax-ediabasx-provider':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
       '@emdzej/inpax-interfaces':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
       '@emdzej/inpax-interpreter':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
       '@emdzej/inpax-parser':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
       '@emdzej/inpax-providers':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
       '@emdzej/inpax-ui-provider-core':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
       '@emdzej/ncsx-cabd':
         specifier: workspace:*
         version: link:../../packages/cabd
@@ -312,8 +312,8 @@ importers:
   packages/pfl:
     dependencies:
       '@emdzej/inpax-ini-parser':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.6.1
+        version: 0.6.1
     devDependencies:
       '@types/node':
         specifier: ^22.13.1
@@ -930,35 +930,35 @@ packages:
   '@emdzej/ediabasx-protocol-uds@0.2.1':
     resolution: {integrity: sha512-egqT2k0MGsUm3M8qwR/ERRf3gDhC59IYHuuWkEe/PYyac3hntB+dABNa6lKlSLyPykixepcYMBDWfTW5tkZuhQ==}
 
-  '@emdzej/inpax-core@0.6.0':
-    resolution: {integrity: sha512-/dG6lfzOPGeHLxjGbytDaar+5S+3xSEtpydwUyRconmlpwtR2VbWBpbkwbhjcvqLICmC4K5UKw+YtH2FJXDjsg==}
+  '@emdzej/inpax-core@0.6.1':
+    resolution: {integrity: sha512-6BMm9PMkVlwDdTjFD043k+d7rfh1dVPsI7prFca6Ny27mEVi1rDfdj/xPszhebs4WEOEpGAGBarqzOkgjqn6Pg==}
 
-  '@emdzej/inpax-dispatcher@0.6.0':
-    resolution: {integrity: sha512-eCp80CLrE/BlzpezAQgvt+HmLtIyosyIlxD0yV6s/1PuA9dzfOZre9pH9jFeMIg0r/6s3erYwiXDHgEcYcimYQ==}
+  '@emdzej/inpax-dispatcher@0.6.1':
+    resolution: {integrity: sha512-sC7XCnMpS7p2AChuUduq6qhoXmeSXnJxa0iilBJGGCjsnn0hLrt5Ciajp0CTMaYKTVJY6mB4EJAav0xGDVd6XA==}
 
-  '@emdzej/inpax-ediabasx-provider@0.6.0':
-    resolution: {integrity: sha512-AXBO3vyFoysG8xVBaTeVpzYZR8y4iWmnQDHElkJlIy0zAxLqIdqS1SKnBShACQeWmUhMUC5B/LU5lrrR4Rl3aQ==}
+  '@emdzej/inpax-ediabasx-provider@0.6.1':
+    resolution: {integrity: sha512-o2mk67GbQv/b3VOr6ZcfbTaOxNkBY2jbxT1sOROjgrhylxN5ab9TNa2c4pnNSs32NjLEB4Qhzapld05PkdgGzA==}
 
-  '@emdzej/inpax-ini-parser@0.6.0':
-    resolution: {integrity: sha512-zOCMrPNXnW60bVz12FO85F0gHAWzIIsjhcV5YnQ8V381LqV7CcTexcPugZrbMXn4qO+EktKKEwu6ACxfDAjPRg==}
+  '@emdzej/inpax-ini-parser@0.6.1':
+    resolution: {integrity: sha512-EelEPkTb2nwEx9Vg/D8hhVCTWIa+8wzAs3Ku1HAxQ6gP3xnaYaE78uve+4v8M9KaWrqbUeZSBU4GguWICtJQyw==}
 
-  '@emdzej/inpax-interfaces@0.6.0':
-    resolution: {integrity: sha512-PROjh4tKDzGElY1TP/d83utVOGGmP0f3jIuIiNj/8tQ5CT1WPAmjPybPNWLRmVV89eutDpOwSWHUsY0e9Pfm+A==}
+  '@emdzej/inpax-interfaces@0.6.1':
+    resolution: {integrity: sha512-1VsxGKW1Qf+O+37iMsbtE8VRd+eKXTMKg8eBVyz7i5XLRrsPncbl7WT8OHJwPC7w82mFzsJcKfSD8aEa+BroDw==}
 
-  '@emdzej/inpax-interpreter@0.6.0':
-    resolution: {integrity: sha512-bKuqbQZ8moh9XeWS18114pXstDa7YF/aXmDIsBMrSYjUAj0lU/vjbuOOtXL9hJl7Ww7g4mQH86pdFxVtjnKH1w==}
+  '@emdzej/inpax-interpreter@0.6.1':
+    resolution: {integrity: sha512-wlllYBR5MOGw84uGNQTZeciHy4fDBL+BiaU0aemZLI7IE+DCuxEaZhPOTIQnvZciR9EiD69HuNILI49Cg2Wksg==}
 
-  '@emdzej/inpax-logger@0.6.0':
-    resolution: {integrity: sha512-s46IYI7sXUDNfKZTIoMEBsEOrXfT1malojPNplSVN3zyfo9HQJjfp0Qk28MgNdCwbv4wkdFZmwXGch1YwS7eyw==}
+  '@emdzej/inpax-logger@0.6.1':
+    resolution: {integrity: sha512-ef8NahQ2ZchhnZTyLkCgwVqIGKN8miSnFNZXHEc8UBu/F2aDX878N3ex6bU78x1Yeq8Bp0fU7v7kRBDcvgj4kg==}
 
-  '@emdzej/inpax-parser@0.6.0':
-    resolution: {integrity: sha512-DOQ3XBZC/whxK5qjL1MoUd3TaHJq1WAfB9S+sT8ebshWbcFBBupCTV3CX/RLuchUPDibN51MwpN4J5cStWDoqg==}
+  '@emdzej/inpax-parser@0.6.1':
+    resolution: {integrity: sha512-taq4hPeNdVAvrqcFCUrDufBgTNoUhOXj6QYekB/xe/B7HUAN/mLG9GghKFoxqdpZHGSFrCICPAgUyEzQLAx7OA==}
 
-  '@emdzej/inpax-providers@0.6.0':
-    resolution: {integrity: sha512-N72DUKroZTsv6QUc7sYN1re3K0y5XH1QYAI/v88RV9VHmoTfvkP27vFdjD46qPc2wNjTdtJ5xIDfblJAtiE2YQ==}
+  '@emdzej/inpax-providers@0.6.1':
+    resolution: {integrity: sha512-yXRWLa30nIsWGvQWNDx3EXkM+fSDRiqKU/zimwg+Oq2kgHUlgnegJh+st/bdzSfniMFhJr/WKKh0ldEmPCj3Zw==}
 
-  '@emdzej/inpax-ui-provider-core@0.6.0':
-    resolution: {integrity: sha512-uNg8d3GjTpD57ggObjOpUbc/SmJDxxPFvH5bHVUgc9xxdqyfKhyMVWNN3Cy1q/CtvmpA5l0uYqbn9toMk2lsgg==}
+  '@emdzej/inpax-ui-provider-core@0.6.1':
+    resolution: {integrity: sha512-nYb++bDL1w6vqSlre32yVuTITBR8G2ztg25vp6XdRxUH6XtqHeidYdFeAKuyIzDKue2bE/t3Ku3N68n2NMP1Fg==}
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -4065,57 +4065,57 @@ snapshots:
 
   '@emdzej/ediabasx-protocol-uds@0.2.1': {}
 
-  '@emdzej/inpax-core@0.6.0': {}
+  '@emdzej/inpax-core@0.6.1': {}
 
-  '@emdzej/inpax-dispatcher@0.6.0':
+  '@emdzej/inpax-dispatcher@0.6.1':
     dependencies:
-      '@emdzej/inpax-core': 0.6.0
-      '@emdzej/inpax-interfaces': 0.6.0
+      '@emdzej/inpax-core': 0.6.1
+      '@emdzej/inpax-interfaces': 0.6.1
 
-  '@emdzej/inpax-ediabasx-provider@0.6.0':
+  '@emdzej/inpax-ediabasx-provider@0.6.1':
     dependencies:
       '@emdzej/ediabasx-ediabas': 0.2.1
-      '@emdzej/inpax-core': 0.6.0
-      '@emdzej/inpax-interfaces': 0.6.0
+      '@emdzej/inpax-core': 0.6.1
+      '@emdzej/inpax-interfaces': 0.6.1
       eventemitter3: 5.0.4
     transitivePeerDependencies:
       - bufferutil
       - supports-color
       - utf-8-validate
 
-  '@emdzej/inpax-ini-parser@0.6.0': {}
+  '@emdzej/inpax-ini-parser@0.6.1': {}
 
-  '@emdzej/inpax-interfaces@0.6.0':
+  '@emdzej/inpax-interfaces@0.6.1':
     dependencies:
       eventemitter3: 5.0.4
 
-  '@emdzej/inpax-interpreter@0.6.0':
+  '@emdzej/inpax-interpreter@0.6.1':
     dependencies:
-      '@emdzej/inpax-core': 0.6.0
-      '@emdzej/inpax-dispatcher': 0.6.0
-      '@emdzej/inpax-interfaces': 0.6.0
-      '@emdzej/inpax-logger': 0.6.0
-      '@emdzej/inpax-parser': 0.6.0
-      '@emdzej/inpax-providers': 0.6.0
+      '@emdzej/inpax-core': 0.6.1
+      '@emdzej/inpax-dispatcher': 0.6.1
+      '@emdzej/inpax-interfaces': 0.6.1
+      '@emdzej/inpax-logger': 0.6.1
+      '@emdzej/inpax-parser': 0.6.1
+      '@emdzej/inpax-providers': 0.6.1
       eventemitter3: 5.0.4
 
-  '@emdzej/inpax-logger@0.6.0':
+  '@emdzej/inpax-logger@0.6.1':
     dependencies:
       pino: 9.14.0
       pino-pretty: 11.3.0
 
-  '@emdzej/inpax-parser@0.6.0':
+  '@emdzej/inpax-parser@0.6.1':
     dependencies:
-      '@emdzej/inpax-core': 0.6.0
+      '@emdzej/inpax-core': 0.6.1
 
-  '@emdzej/inpax-providers@0.6.0':
+  '@emdzej/inpax-providers@0.6.1':
     dependencies:
-      '@emdzej/inpax-interfaces': 0.6.0
+      '@emdzej/inpax-interfaces': 0.6.1
       eventemitter3: 5.0.4
 
-  '@emdzej/inpax-ui-provider-core@0.6.0':
+  '@emdzej/inpax-ui-provider-core@0.6.1':
     dependencies:
-      '@emdzej/inpax-interfaces': 0.6.0
+      '@emdzej/inpax-interfaces': 0.6.1
       eventemitter3: 5.0.4
 
   '@esbuild/aix-ppc64@0.21.5':
