@@ -314,38 +314,81 @@ const vm = new VM(ipo, {
 
 ---
 
-## What I expect to find in Stage 2
+## Stage 2 update — the "verified-same" assumption was wrong
 
-Educated guesses, to be replaced by ghidra evidence:
+After empirical analysis (`docs/scripts/match-syscall-table.mjs`, run
+across all 194 `A_*.ipo` files in NCSEXPER/SGDAT plus the 1,604
+Kernfunktion IPOs), **NCSEXPER's slot table diverges from INPA's
+across virtually the entire numeric ID range**, not just the few
+slots we had flagged. The earlier "verified-same" annotations were
+inferred from `inpa.h`/`cabi.h` header similarity, which turns out
+to be irrelevant: both apps ship identical `.h` files, but each
+embeds its own runtime dispatch table.
 
-| Slot | Inpax name | Likely NCSEXPER behaviour |
-|---|---|---|
-| `0x00`-`0x08` | setmenutitle..returnstatemachine | **Verified-same** (state-machine + menu primitives shared with INPA) |
-| `0x0B` | setjobstatus | **Verified-same** (string-state setter) |
-| `0x0C` | exit | **Verified-same** |
-| `0x0D` | exitwindows | **Divergent → apiJob** ✓ confirmed |
-| `0x0E`-`0x14` | scriptselect..stop | **Verified-same** |
-| `0x2B`-`0x3A` | PEM* | **Probably divergent** — NCSEXPER's PEM writes to its own protocol files (TRC etc.) using NCSEXPER-specific formatting, not INPA's print spool. Each slot may end up `divergent` with a `handler` binding into a `PemProvider`. |
-| `0x35` | (no inpax name) | **Unknown** — needs ghidra. Could be an apiResult* sibling. |
-| `0x40`-`0x4E` | input*/text*/digital*/analog*/hexdump | **Verified-same** (input dialogs + gauges work the same across INPA/NCSEXPER) |
-| `0x50` | clearrect | **Verified-same** |
-| `0x53`-`0x54` | infobox/userboxopen | **Verified-same** |
+Concrete examples from the 789,508 sys-calls we logged:
 
-The big surface area to audit is the **PEM range** (`0x2B`-`0x3A`):
-NCSEXPER's protocol-report system feeds the TRC files we already
-discussed, not INPA's print spool — so handlers likely differ even if
-the IDs match. Expected outcome: most PEM* entries become `'divergent'`
-with `handler` bindings into a future `PemProvider`.
+| Slot | Inpax/INPA name@slot       | Inpax signature                                  | NCSEXPER bytecode pattern (samples)     |
+|------|----------------------------|--------------------------------------------------|-----------------------------------------|
+| 0x02 | `setitem`                  | `(in: int, in: string, in: bool)` — 3 args       | A_*.ipo: 0 args (795), other: 3 args (5251) |
+| 0x0D | `exitwindows`              | `()` — 0 args                                    | 4 in:string args (35,491)               |
+| 0x2B | `PEMInitialisiere`         | `(out: bool)` per header, `(out)` per inpax dispatch | 1 in:int arg (19,613, 100%)         |
+| 0x53 | `infobox`                  | `(in: string, in: string)` — 2 args              | 5 args (sample seen in `cabimain`)      |
 
----
+The bytecode opcodes (`0x0C CALL sys`, `0x0D CALLE`, FRAME marker
+convention, etc.) are stable across the two hosts — both NCSEXPER
+and INPA statically linked the same Softing bytecode interpreter.
+What differs is the **runtime function-ID array** in `.data` that
+each `.exe` populates in its `CInterpreter` constructor.
 
-## Open questions to resolve in Stage 2
+The empirical scan also shows NCSEXPER uses **two distinct slot
+tables** depending on which IPO family is loaded:
 
-1. **Slot 0x35 (`sys_35`)** — what is it? Possibly an `apiResultText`
-   sibling that pairs with `CDHapiJob` at 0x0D for reading per-job
-   results.
-2. **The PEM slots** — do they all write to the same protocol file?
-   Where does that file path come from at runtime?
-3. **Are there NCSEXPER-only IDs beyond the inpax range?** Some IPOs we
-   haven't disassembled (Cod, Lesen, ZcsLesen) may use IDs > 0x54 that
-   inpax has annotated but NCSEXPER repurposes.
+- **CABI runtime** (`A_*.ipo` — 194 files, the coding/identity flow): 55
+  distinct slots used in range 0x00..0x60.
+- **INPA-style runtime** (D_*.ipo, abs_uc.ipo, ews.ipo, … — 1,604 files,
+  Kernfunktionen): 124 distinct slots, partially overlapping but with
+  different semantics at the same numeric IDs.
+
+Same interpreter, two contexts, two tables. NCSEXPER probably
+swaps which `.data` array is active depending on which IPO it's
+loading — needs ghidra to confirm, but the empirical evidence
+(same slot used with incompatible signatures across A_* vs others)
+is conclusive.
+
+### Current workaround in `apps/ncsx-web/src/lib/runtime.svelte.ts`
+
+We register a no-op `SystemFunctionOverride` for every slot in
+`0x00..0x60`, then layer a real handler on slot `0x0D` that routes
+to our `CabiProvider.CDHapiJob`. The no-op approach works because
+`opCall`'s `popFrame()` truncates the value stack back to the
+FRAME marker after each override returns — so args (and any
+out-refs the IPO pushed) get cleaned up automatically. Callers
+reading out-param destinations see the ALLOC default (0 / "" /
+false), which the IPO interprets as "no error" — falls through
+to the happy path.
+
+Cost: protocol-report side effects are gone (acceptable — we have
+our own UI), and the few real-data slots (apiResult*, CDH*) don't
+write back through their refs. The latter doesn't matter for the
+current flow because we read EDIABAS results directly off
+`cabi.lastJob.sets` after `runCabimain` returns.
+
+### What stage 2 still needs
+
+1. **Dump NCSEXPER.EXE's actual `.data` syscall table via ghidra**.
+   Prior attempts (`DumpNcsexperSyscallTable.java`,
+   `FindSyscallTableInit.java`) came up empty. The table is
+   probably populated programmatically rather than declared as a
+   static initialiser — need to find the `CInterpreter`
+   constructor (or wherever `[reg+0x50]` writes the handler
+   pointers) and follow the function pointers back to named
+   symbols.
+2. **For each slot the IPO actually uses (55 + 124 distinct,
+   union ≈ 150)**, replace the no-op with a real handler that
+   reads/writes through refs correctly. Until then, anything
+   that depends on syscall return values besides apiJob is
+   functionally a no-op.
+3. **Confirm the two-table hypothesis**: is there one table per
+   IPO style, or is it the same physical array but the IPO
+   carries an "expected calling convention" hint we haven't
+   identified?

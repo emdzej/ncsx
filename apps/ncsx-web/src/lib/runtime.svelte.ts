@@ -233,35 +233,42 @@ export async function startNcsRuntime(
     await cabi.CDHapiJob(sgbd, sgbdJob, paramsArg, "");
   };
 
-  // 6a. PEM range overrides. Inpax binds slots 0x2B..0x3D to the INPA PEM
-  //     functions with hardcoded signatures like
-  //     `PEMInitialisiere(out: bool Result)`. NCSEXPER reuses these slot IDs
-  //     for different functions (per `docs/ncsexper-syscall-table.md` — the
-  //     PEM range is flagged "probably divergent" alongside the verified
-  //     0x0D divergence). The mismatch trips the dispatcher's `writeOutParams`
-  //     because NCSEXPER's IPO doesn't push an out-ref where INPA would.
+  // 6a. Catch-all no-op for every CABI-runtime slot used by A_*.ipo files.
   //
-  //     A_*.ipo dispatchers hit these slots heavily during `__inpa_startup__`
-  //     and inside `TestCDHFehler`. We don't need protocol-report output, so
-  //     we register a no-op for the whole range. `opCall` calls `popFrame()`
-  //     after the override returns, which truncates the value stack back to
-  //     the FRAME marker — so args (and any out-refs that *were* pushed) get
-  //     cleaned up automatically.
+  //     NCSEXPER's `CALL sys N` dispatch table is entirely different from
+  //     INPA's — same opcode (0x0C), same bytecode format, but a different
+  //     numeric-ID → function mapping baked into NCSEXPER.EXE's `.data`.
+  //     We inferred from disassembling all 194 A_*.ipo files that the CABI
+  //     runtime uses 55 distinct slot IDs in the range 0x00..0x60. Inpax's
+  //     hardcoded SystemFunctionMap targets INPA's table — using it
+  //     unmodified produces "Stack underflow" / "Expected reference for
+  //     out parameter" on virtually every call (PEMInitialisiere expects
+  //     4 args but NCSEXPER's same-numbered slot takes 1, etc.).
   //
-  //     Cost: any caller reading the bool "Result" out-param sees whatever
-  //     value was there before (typically false). For pure observability this
-  //     is fine; if a real handler depends on a `true` ack we'll need a more
-  //     careful override that writes through the ref.
-  const pemNoOp: SystemFunctionOverride = () => {
-    /* observability call — `opCall` popFrame cleans the args after we return */
+  //     Workaround until we dump NCSEXPER's actual `.data` table via
+  //     ghidra: register a no-op for every slot the IPOs touch. `opCall`
+  //     calls `popFrame()` after the override returns, which truncates the
+  //     value stack back to the FRAME marker — args (and any out-refs)
+  //     get cleaned up automatically. Slots with observability semantics
+  //     (PEM*, OutputDebug*, setjobstatus) suffer no real loss; slots
+  //     with out-param semantics leave the caller's destination at its
+  //     pre-call value (typically the ALLOC default — 0 / "" / false),
+  //     which is "no error" by convention. The IPO falls through error
+  //     branches.
+  //
+  //     The load-bearing slot is 0x0D (apiJob bridge — confirmed via
+  //     ghidra + the FRAME→4-string-arg pattern in every FgnrLesen /
+  //     Cod / Lesen / ZcsLesen handler). That one gets a real handler
+  //     above (`apiJobOverride`) that routes into our CabiProvider.
+  //     Results land on `cabi.lastJob` and the orchestrator reads them
+  //     via `handle.cabi.findResult(...)` after `runCabimain` returns —
+  //     we don't depend on the IPO's apiResultText calls writing back.
+  const noOp: SystemFunctionOverride = () => {
+    /* CABI runtime slot — popFrame after this cleans args + out-refs */
   };
-  const systemFunctions = new Map<number, SystemFunctionOverride>([
-    [SystemFunction.exitwindows, apiJobOverride],
-  ]);
-  for (let id = 0x2b; id <= 0x3d; id++) {
-    if (id === 0x35) continue; // gap in inpax's enum — leave default routing
-    systemFunctions.set(id, pemNoOp);
-  }
+  const systemFunctions = new Map<number, SystemFunctionOverride>();
+  for (let id = 0x00; id <= 0x60; id++) systemFunctions.set(id, noOp);
+  systemFunctions.set(SystemFunction.exitwindows, apiJobOverride);
 
   const vm = new VM(ipo, {
     runtime: {
