@@ -1,0 +1,76 @@
+# total IPOs: 1795, CABI (cabimain): 915, errored: 3
+# CALL sys observed: 334505, distinct slots: 71
+
+slot | dominant sig (count, %)              | callers (sample)
+-----+---------------------------------------+-----------------
+0x00 | in=2 ref=0      ( 3896/ 3896 = 100%) | TesterPresentHandling,StopTesterPresentHandling,MKB_CProg
+0x01 | in=1 ref=1      ( 3215/ 3215 = 100%) | TesterPresentHandling,PruefeSignatur,LoescheFlash
+0x02 | in=0 ref=0      ( 4172/ 4172 = 100%) | TestCDHFehler,SetCDHFehler,TestApiFehler
+0x04 | in=1 ref=1      ( 7158/ 7165 = 100%)  others: in=2 ref=0@7 | OutputDebugInt,GetDiagProt,SetEcuAdr
+0x05 | in=1 ref=4      (   66/   66 = 100%) | GetFsStatus,GetAllSwId,GetCertificate
+0x06 | in=2 ref=1      ( 7823/ 7823 = 100%) | AbgleichwerteLesen,AbgleichwerteSchreiben,AbgleichwerteLesenAuto
+0x07 | in=1 ref=1      ( 3336/ 3336 = 100%) | Programmieren,GetFsStatus,GetAllSwId
+0x08 | in=3 ref=1      ( 1002/ 1002 = 100%) | Programmieren,AuthenticateSession,GetFsStatus
+0x0b | in=0 ref=0      (11373/11373 = 100%) | GetDiagProt,SetDiagProt,SetEcuAdr
+0x0c | in=0 ref=0      (  907/  907 = 100%) | cabiexit
+0x0d | in=4 ref=0      (35491/35491 = 100%) | TesterPresentHandling,GetDiagProt,SetDiagProt
+0x0e | in=5 ref=0      ( 5086/ 5086 = 100%) | FlashSchreiben,FlashSchreibenEnde,FlashSchreibenAdresse
+0x0f | in=3 ref=1      (38149/38156 = 100%)  others: in=4 ref=0@7 | TestApiFehler,GetDiagProt,Ident
+0x10 | in=2 ref=1      (17965/18478 =  97%)  others: in=3 ref=0@513 | GetDiagProt,Ident,AifLesen
+0x11 | in=0 ref=1      (   16/   16 = 100%) | GetFsStatus,GetAllSwId
+0x14 | in=3 ref=1      ( 1524/ 1524 = 100%) | Programmieren,AuthenticateSession,GetCertificate
+0x18 | in=4 ref=0      (  552/  552 = 100%) | Programmieren
+0x1a | in=3 ref=2      ( 3607/ 3607 = 100%) | TestApiFehlerNoExit,DatenReferenzLesen,TestApiFehler
+0x1b | in=2 ref=2      (   30/   30 = 100%) | GetSetResponseCode,Programmieren
+0x1e | in=0 ref=1      (  374/  374 = 100%) | TestApiFehler,RepeatedApiJobOnError,TestDleFehler
+0x1f | in=0 ref=1      ( 1057/ 1057 = 100%) | TestApiFehlerNoExit,TestApiFehler,Programmieren
+0x21 | in=2 ref=0      (  107/  107 = 100%) | cabimain,Programmieren,MKB_CProg
+0x22 | in=0 ref=0      (  113/  113 = 100%) | cabiexit,Programmieren,MKB_CProg
+0x23 | in=1 ref=0      (  110/  110 = 100%) | OutputDebugData,Programmieren,MKB_CProg
+0x2b | in=1 ref=0      (19613/19613 = 100%) | TestCDHFehler,SetCDHFehler,TestApiFehler
+0x2c | in=2 ref=1      (   91/   91 = 100%) | Cod,Lesen,PolsterLack
+0x2d | in=1 ref=2      (  301/  301 = 100%) | Fgnr,AeIndex,Cod
+0x2e | in=2 ref=1      (55189/55196 = 100%)  others: in=3 ref=0@7 | Jobs,UProgLesen,GetDiagProt
+0x2f | in=1 ref=2      (10963/10977 = 100%)  others: in=2 ref=1@14 | SetDiagProt,SetEcuAdr,AifLesen
+0x31 | in=0 ref=2      (    6/    6 = 100%) | GetSg,Cod,searchFAM
+0x32 | in=1 ref=1      (    6/    6 = 100%) | Cod,Cod2
+0x33 | in=0 ref=2      (12448/12448 = 100%) | GetDiagProt,SetDiagProt,SetEcuAdr
+0x35 | in=1 ref=1      (   22/   22 = 100%) | Cod,FgnrSchreiben
+0x36 | in=1 ref=1      (   62/   62 = 100%) | Cod
+0x37 | in=1 ref=1      (   90/   90 = 100%) | Cod,TestCod,CodSchreiben
+0x38 | in=1 ref=1      (   65/   65 = 100%) | Cod,TestCod,CodSchreiben
+0x39 | in=0 ref=0      (  314/  314 = 100%) | Cod,Lesen,TestCod
+0x3a | in=0 ref=0      (   54/   54 = 100%) | Cod,TestCod,CodSchreiben
+0x3e | in=1 ref=0      (    1/    1 = 100%) | Cod2
+0x3f | in=2 ref=3      (    2/    2 = 100%) | GetControler
+0x40 | in=3 ref=1      (  176/  176 = 100%) | Cod,Lesen,CodSchreiben
+0x41 | in=1 ref=1      (   23/   23 = 100%) | Cod,FgnrSchreiben
+0x43 | in=1 ref=1      (    9/    9 = 100%) | Cod
+0x44 | in=0 ref=1      (  301/  301 = 100%) | Cod,TestCod,CodSchreiben
+0x45 | in=0 ref=1      (  201/  201 = 100%) | Cod,Lesen,CodLesen
+0x46 | in=1 ref=1      (   15/   15 = 100%) | Cod,Lesen
+0x47 | in=0 ref=0      (  146/  146 = 100%) | Programmieren,MKB_CProg,EMS2KProg
+0x48 | in=2 ref=4      (  497/  497 = 100%) | Cod,NettoDat,Lesen
+0x49 | in=0 ref=1      (  453/  453 = 100%) | Cod,NettoDat,Lesen
+0x4a | in=1 ref=1      (  206/  206 = 100%) | Cod,Lesen,CodLesen
+0x4b | in=0 ref=2      ( 8311/ 8835 =  94%)  others: in=1 ref=1@524 | WASBufferKopieren,Programmieren,AuthenticateSession
+0x4c | in=1 ref=1      ( 4897/ 4897 = 100%) | WASBufferKopieren,Programmieren,cabiexit
+0x4d | in=3 ref=1      (23030/23030 = 100%) | BufferAuffuellen,WASBufferKopieren,VorbereitenRDBuffer
+0x4e | in=3 ref=1      ( 1509/ 1509 = 100%) | Programmieren,StoreFsc,StoreCertificate
+0x4f | in=2 ref=2      ( 7148/ 7148 = 100%) | WASBufferKopieren,Programmieren,AuthenticateSession
+0x50 | in=2 ref=2      (   30/   30 = 100%) | Cod,NettoDat
+0x51 | in=1 ref=2      (  156/  156 = 100%) | OutputDebugData,GetAllSwId,Cod
+0x53 | in=5 ref=0      ( 1922/ 1922 = 100%) | OutputDebugString,SetCDHFehler,cabimain
+0x54 | in=0 ref=1      (13418/13418 = 100%) | Jobs,GetDiagProt,SetDiagProt
+0x55 | in=2 ref=3      ( 3218/ 3218 = 100%) | Programmieren,GDSMG2Prog,MKB_CProg
+0x56 | in=2 ref=1      (11697/11697 = 100%) | GetDiagProt,Ident,AifLesen
+0x57 | in=1 ref=2      ( 3076/ 3076 = 100%) | Programmieren,FlashStatusLesen,AuthenticateSession
+0x5a | in=1 ref=0      ( 3616/ 3616 = 100%) | TesterPresentHandling,SGReset,Programmieren
+0x5b | in=3 ref=1      (   81/   81 = 100%) | NettoDat,Cod,VIDEOProg
+0x5d | in=7 ref=2      ( 1043/ 1043 = 100%) | Programmieren,AuthenticateSession,Authentisierung
+0x60 | in=2 ref=1      (   56/   56 = 100%) | PolsterLack,FAwrite,GetBedingung
+0x61 | in=2 ref=1      (  125/  125 = 100%) | Cod,TestCod,CodLesen
+0x62 | in=0 ref=2      ( 1034/ 1034 = 100%) | Programmieren,AuthenticateSession,Authentisierung
+0x63 | in=4 ref=1      (   20/   20 = 100%) | FlashDLE
+0x64 | in=5 ref=1      (  653/  653 = 100%) | StoreFsc,StoreCertificate,GetCertificate
+0x65 | in=0 ref=2      (   10/   10 = 100%) | Programmieren

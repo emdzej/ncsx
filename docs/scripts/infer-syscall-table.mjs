@@ -1,91 +1,88 @@
+// Empirical syscall-table inferrer for NCSEXPER's CABI runtime.
+//
+// Walks every IPO file in NCSEXPER/SGDAT whose function table contains
+// `cabimain` (i.e. the script is compiled for NCSEXPER's CABI host),
+// and for each `CALL sys N` it observes between a `FRAME` and the
+// matching `CALL`, records the (in-args, out-refs) shape that was
+// pushed. Aggregates per slot — gives a strong frequency signal for
+// each slot's actual NCSEXPER signature.
+//
+// INPA-style IPOs (`inpainit`/`inpaexit` entry, ~880 files in NCSEXPER's
+// SGDAT) are filtered out — their signatures don't match NCSEXPER's
+// runtime because they're compiled against INPA.EXE's slot table. They
+// physically ship in NCSEXPER's SGDAT because BMW's install bundles
+// both apps' content together, but NCSEXPER's C++ entry-point lookup
+// hardcodes "cabimain"/"cabiexit" (ghidra-verified in CDHIntInit at
+// 0x004410f0 — no "inpainit" string exists in the binary).
+//
+// Run from apps/ncsx-web/ so node resolves @emdzej/inpax-parser:
+//   node ../../docs/scripts/infer-syscall-table.mjs /path/to/NCSEXPER/SGDAT
+
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseIpo } from "@emdzej/inpax-parser";
 
-// Opcodes
 const OP = { LOAD:1, PUSHREF:2, LOADINOUTREF:3, MOVE:5, PUSHR:6, PUSHREFSTORE:7,
-             ALLOC:8, CALL:12, CALLE:13, RET:14, FRAME:15, LOGTABLE:16, PUSHIMM:17 };
+             ALLOC:8, ALU:9, JMP:10, JMPNZ:11, CALL:12, CALLE:13, RET:14, FRAME:15,
+             LOGTABLE:16, PUSHIMM:17 };
 
 const dir = process.argv[2];
 if (!dir) { console.error("usage: infer-syscall-table.mjs <SGDAT-dir>"); process.exit(2); }
 
-// slot -> Map<signature-key, count>
-const slotSigs = new Map();
-// slot -> Set of (containing function names) for debugging
+function isCabi(ipo) {
+  for (const [, fn] of ipo.functions) if (fn.header.name === "cabimain") return true;
+  return false;
+}
+
+const slotSigs = new Map(); // slot -> Map<"in=N ref=M", count>
 const slotSeenIn = new Map();
-let ipoCount = 0, callCount = 0, errCount = 0;
-
-function record(slot, sig, fnName) {
-  let bucket = slotSigs.get(slot);
-  if (!bucket) { bucket = new Map(); slotSigs.set(slot, bucket); }
-  bucket.set(sig, (bucket.get(sig) ?? 0) + 1);
-  let seen = slotSeenIn.get(slot);
-  if (!seen) { seen = new Set(); slotSeenIn.set(slot, seen); }
-  if (seen.size < 5) seen.add(fnName);
-}
-
-function analyzeFunction(fn) {
-  // Walk linearly. Detect FRAME → ... → CALL sys N patterns.
-  // Between FRAME and CALL, count LOAD (value-push, types from ValueType) and
-  // PUSHREF (reference-push). Anything else (ALU, MOVE, JMP, etc.) marks a
-  // complex flow we can't trivially analyse — skip those samples.
-  const instrs = fn.instructions;
-  let frameAt = -1, valArgs = 0, refArgs = 0, complex = false;
-  for (let pc = 0; pc < instrs.length; pc++) {
-    const i = instrs[pc];
-    if (i.opcode === OP.FRAME) {
-      frameAt = pc; valArgs = 0; refArgs = 0; complex = false;
-      continue;
-    }
-    if (frameAt < 0) continue;
-    if (i.opcode === OP.LOAD || i.opcode === OP.PUSHIMM) {
-      valArgs++;
-    } else if (i.opcode === OP.PUSHREF || i.opcode === OP.LOADINOUTREF || i.opcode === OP.PUSHR) {
-      refArgs++;
-    } else if (i.opcode === OP.CALL) {
-      // Only sys calls (operand1=0x81). User calls (0x80) are user functions.
-      if (i.operand1 === 0x81 && !complex) {
-        const slot = i.operand2;
-        const sig = `in=${valArgs} ref=${refArgs}`;
-        record(slot, sig, fn.header.name);
-        callCount++;
-      }
-      frameAt = -1;
-    } else if (i.opcode === OP.JMP || i.opcode === OP.JMPNZ || i.opcode === OP.RET || i.opcode === OP.CALLE) {
-      // Control-flow disturbance between FRAME and CALL — discard the sample.
-      complex = true;
-    } else if (i.opcode === OP.ALLOC || i.opcode === OP.MOVE || i.opcode === OP.PUSHREFSTORE) {
-      // Allocs / moves change stack in non-arg ways → discard.
-      complex = true;
-    }
-  }
-}
-
-const files = readdirSync(dir).filter(f => /\.ipo$/i.test(f));
-for (const f of files) {
+let ipos = 0, cabiIpos = 0, errored = 0, calls = 0;
+for (const f of readdirSync(dir).filter(f => /\.ipo$/i.test(f))) {
   try {
-    const bytes = new Uint8Array(readFileSync(join(dir, f)));
-    const ipo = parseIpo(bytes);
-    ipoCount++;
-    for (const [, fn] of ipo.functions) analyzeFunction(fn);
-  } catch (e) {
-    errCount++;
-  }
+    const ipo = parseIpo(new Uint8Array(readFileSync(join(dir, f))));
+    ipos++;
+    if (!isCabi(ipo)) continue;
+    cabiIpos++;
+    for (const [, fn] of ipo.functions) {
+      let frameAt = -1, ins = 0, refs = 0, bad = false;
+      for (let pc = 0; pc < fn.instructions.length; pc++) {
+        const i = fn.instructions[pc];
+        if (i.opcode === OP.FRAME) { frameAt = pc; ins = 0; refs = 0; bad = false; continue; }
+        if (frameAt < 0) continue;
+        if (i.opcode === OP.LOAD || i.opcode === OP.PUSHIMM) ins++;
+        else if (i.opcode === OP.PUSHREF || i.opcode === OP.LOADINOUTREF || i.opcode === OP.PUSHR) refs++;
+        else if (i.opcode === OP.CALL) {
+          if (i.operand1 === 0x81 && !bad) {
+            const slot = i.operand2;
+            const key = `in=${ins} ref=${refs}`;
+            let b = slotSigs.get(slot);
+            if (!b) { b = new Map(); slotSigs.set(slot, b); }
+            b.set(key, (b.get(key) ?? 0) + 1);
+            let s = slotSeenIn.get(slot);
+            if (!s) { s = new Set(); slotSeenIn.set(slot, s); }
+            if (s.size < 6) s.add(fn.header.name);
+            calls++;
+          }
+          frameAt = -1;
+        } else { bad = true; }
+      }
+    }
+  } catch { errored++; }
 }
 
-console.log(`# ipos parsed: ${ipoCount}, errored: ${errCount}, sys calls observed: ${callCount}`);
-console.log(`# slots seen: ${slotSigs.size}\n`);
-
+console.log(`# total IPOs: ${ipos}, CABI (cabimain): ${cabiIpos}, errored: ${errored}`);
+console.log(`# CALL sys observed: ${calls}, distinct slots: ${slotSigs.size}\n`);
+console.log("slot | dominant sig (count, %)              | callers (sample)");
+console.log("-----+---------------------------------------+-----------------");
 const slots = [...slotSigs.keys()].sort((a, b) => a - b);
-console.log("slot | dominant sig (count, % of slot)               | seen-in (sample)");
-console.log("-----+------------------------------------------------+-----------------");
 for (const slot of slots) {
   const bucket = slotSigs.get(slot);
   const total = [...bucket.values()].reduce((a, b) => a + b, 0);
   const sorted = [...bucket.entries()].sort((a, b) => b[1] - a[1]);
-  const [topSig, topCount] = sorted[0];
+  const [topKey, topCount] = sorted[0];
   const pct = ((topCount / total) * 100).toFixed(0);
-  const others = sorted.slice(1, 3).map(([s, c]) => `${s}@${c}`).join(", ");
+  const others = sorted.slice(1, 3).filter(([,c]) => c >= 5).map(([s, c]) => `${s}@${c}`).join(", ");
   const sample = [...(slotSeenIn.get(slot) ?? [])].slice(0, 3).join(",");
-  console.log(`0x${slot.toString(16).padStart(2,'0')} | ${topSig.padEnd(14)} (${topCount}/${total}=${pct.padStart(3)}%)${others ? " others: " + others : ""} | ${sample}`);
+  const otherStr = others ? `  others: ${others}` : "";
+  console.log(`0x${slot.toString(16).padStart(2,'0')} | ${topKey.padEnd(15)} (${topCount.toString().padStart(5)}/${total.toString().padStart(5)} = ${pct.padStart(3)}%)${otherStr} | ${sample}`);
 }
