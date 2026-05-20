@@ -161,14 +161,41 @@ function writeOut(
 /**
  * Build the per-slot override map. Returns a `Map<slotId, override>`
  * suitable for passing to `VM`'s `systemFunctions` config.
+ *
+ * Each override is also wrapped in an instrumentation shim that:
+ *   - Counts syscalls and aborts after `SAFETY_CAP` invocations so a
+ *     runaway IPO can't lock the browser forever. The cap is high
+ *     enough that legitimate flows pass through cleanly.
+ *   - Forces a `setTimeout(0)` macrotask yield every
+ *     `YIELD_INTERVAL` syscalls so the browser can repaint, UI events
+ *     can fire, and we can observe console logs in real time. Without
+ *     this, hundreds of consecutive sync syscalls between async
+ *     `apiJob` boundaries can starve the macrotask queue and freeze
+ *     the page.
  */
+const SAFETY_CAP = 50_000;
+const YIELD_INTERVAL = 200;
+
 export function buildCabiSystemFunctions(
   cabi: CabiProvider,
   opts: CabiOverrideOptions,
 ): Map<number, SystemFunctionOverride> {
   const map = new Map<number, SystemFunctionOverride>();
+  let count = 0;
   for (const slot of NCSEXPER_CABI_SLOTS) {
-    map.set(slot.id, makeOverride(slot, cabi, opts));
+    const raw = makeOverride(slot, cabi, opts);
+    map.set(slot.id, async (ctx, vm) => {
+      count++;
+      if (count > SAFETY_CAP) {
+        throw new Error(
+          `[cabi-syscall] safety cap (${SAFETY_CAP}) hit — IPO is likely in a runaway loop. Last slot: 0x${slot.id.toString(16)} ${slot.name}`,
+        );
+      }
+      if (count % YIELD_INTERVAL === 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      await raw(ctx, vm);
+    });
   }
   return map;
 }
