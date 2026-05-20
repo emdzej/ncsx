@@ -276,6 +276,18 @@ function makeOverride(
         writeOut(ctx, args.ErrNr, "int", 0); // "no error" — IPO falls through happy path
       };
 
+    case "testtimer":
+      // out: bool expiredflag — IPO uses settimer/testtimer pairs to
+      // build busy-wait loops (`Warten`: while (!testtimer()) {}). If
+      // we no-op, the loop spins forever and freezes the browser thread.
+      // We own time at the host level (await for async EDIABAS calls);
+      // the IPO's polling cadence is irrelevant. Always report "timer
+      // expired" so any busy-wait exits on its first iteration.
+      return (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        writeOut(ctx, args.expiredflag, "bool", true);
+      };
+
     case "CDHSetReturnVal":
     case "CDHResetError":
     case "CDHResetApiJobData":
@@ -335,7 +347,6 @@ function makeOverride(
     case "CDHGetApiJobData":
     case "CDHGetApiJobByteData":
     case "settimer":
-    case "testtimer":
     case "exit":
     case "hexconvert":
     case "simnum":
