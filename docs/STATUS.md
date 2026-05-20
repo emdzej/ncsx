@@ -8,6 +8,11 @@ Last updated: commit `ddd67b4` (Nov 2025).
 > **The full NCS Expert ↔ IPO ↔ CABI ↔ EDIABAS call architecture** (it's wild):
 > [`call-architecture.md`](call-architecture.md). Required reading before touching
 > packages/wire or packages/inpax-cabi-provider.
+>
+> **NCSEXPER syscall table** (for upstream pluggable inpax SystemFunctionMap):
+> [`ncsexper-syscall-table.md`](ncsexper-syscall-table.md) — staged inventory +
+> ghidra verification recipe + the canonical machine-readable map at
+> `packages/inpax-cabi-provider/src/ncsexper-syscalls.ts`.
 
 ## TL;DR
 
