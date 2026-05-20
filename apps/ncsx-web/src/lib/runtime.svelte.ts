@@ -29,8 +29,21 @@
  */
 
 import { parseIpo } from "@emdzej/inpax-parser";
-import { VM, MainScheduler } from "@emdzej/inpax-interpreter";
+import { VM, MainScheduler, ExecutionContext } from "@emdzej/inpax-interpreter";
+import { SystemFunction } from "@emdzej/inpax-core";
 import { WebUIProvider } from "@emdzej/inpax-web-provider";
+import { CabiProvider } from "@emdzej/ncsx-inpax-cabi-provider";
+
+/**
+ * Inpax 0.6.0 defines this type in `interpreter.ts` but doesn't re-export it
+ * from the vm/index barrel — packaging gap. Re-declare locally; the shape
+ * mirrors the interpreter's `SystemFunctionOverride` definition exactly so
+ * if/when inpax exports it we can drop this and `import type`-it instead.
+ */
+type SystemFunctionOverride = (
+  ctx: ExecutionContext,
+  vm: VM,
+) => void | Promise<void>;
 import {
   NullSimulationProvider,
   NullPrintProvider,
@@ -53,6 +66,12 @@ export interface RuntimeHandle {
   cabd: string;
   /** Underlying VM — for advanced callers / debugging. */
   vm: VM;
+  /**
+   * CABI/CDH provider — host-side state for the 80+ CDH functions the IPO can
+   * call. Stores the per-job `lastJob.sets` map after `CDHapiJob` runs; UI
+   * code can read named results from it via `cabi.findResult(name)`.
+   */
+  cabi: CabiProvider;
   /** EDIABAS bridge — exposes `lastResults` after a job runs. */
   ediabas: EdiabasXProvider;
   /** Stop the scheduler + tear down. Idempotent. */
@@ -139,9 +158,61 @@ export async function startNcsRuntime(cabdBasename: string): Promise<RuntimeHand
   });
   await nativeImports.prefetchIniFiles();
 
-  // 5. VM. CABI provider intentionally absent for now — task #51. When the IPO
-  //    calls a CDH* function via CALLE it will throw "unimplemented"; we log it
-  //    here so we can triage which CDH functions matter for the first read flow.
+  // 5. CABI provider — owns the CDH* surface + the per-IPO context (current
+  //    CABD basename, SGFAM row, chassis pointer). Currently focused on
+  //    CDHapiJob since slot 0x0D (`SystemFunction.exitwindows` in inpax's
+  //    naming, but NCSEXPER's runtime uses it as the apiJob bridge — see
+  //    docs/ncsexper-syscall-table.md for the proof) is the load-bearing
+  //    override that makes A_*.ipo's per-CABD job-name mapping work.
+  const cabi = new CabiProvider({
+    ediabas: connection.session.ediabas,
+    chassis: app.chassis,
+    currentSgName: app.selectedModule?.umrsg ?? null,
+    currentCabd: cabdBasename,
+    currentCbd: app.selectedModule
+      ? `C${app.selectedModule.codingIndex.toString(16).toUpperCase().padStart(2, "0")}`
+      : null,
+    currentCodierBaureihe: app.chassis?.code ?? null,
+  });
+
+  // 6. System-function overrides. The IPO bytecode calls `CALL sys 0x0D` with
+  //    four string args (jobLabel, sgbdJob, params, paramsHex) — the IPO
+  //    bytecode treats this as the apiJob bridge regardless of the
+  //    compile-time keyword inpax names it. We bind it to our CDHapiJob
+  //    handler which delegates to the live Ediabas instance.
+  //
+  //    Stack order: LIFO. The IPO pushes (jobLabel, sgbdJob, params,
+  //    paramsHex) top-down, so we pop them in reverse: paramsHex first,
+  //    then params, then sgbdJob, then jobLabel.
+  //
+  //    The result lands on cabi.lastJob — subsequent CDHapiResult* calls
+  //    (also overridable here if the IPO uses them) read from that state.
+  //    For the current flow (FgnrLesen) the IPO doesn't actually call
+  //    CDHapiResultText; NCSEXPER's COAPI C code reads the result via
+  //    `apiResultText("FAHRGESTELL_NR", ...)` directly after the IPO returns
+  //    (we mirror that by reading EdiabasXProvider's lastResults from the
+  //    orchestrator).
+  const apiJobOverride: SystemFunctionOverride = async (ctx) => {
+    const paramsHex = ctx.popString();
+    const params = ctx.popString();
+    const sgbdJob = ctx.popString();
+    const jobLabel = ctx.popString();
+    // jobLabel is the contract name (e.g. "FGNR_LESEN") — useful for logging
+    // and the protocol report. sgbdJob is what we actually pass to apiJob.
+    // app.selectedModule.sgbd holds the resolved SGBD basename from SGAUSWAHL.
+    const sgbd = app.selectedModule?.sgbd ?? "";
+    if (!sgbd) {
+      console.warn(`[ncsx-runtime] CDHapiJob override fired but no SGBD selected — ${jobLabel} → ${sgbdJob}`);
+      return;
+    }
+    // Combine params + paramsHex into the EDIABAS params arg. NCSEXPER
+    // passes both as a single string concatenated; for now we use whichever
+    // is non-empty (paramsHex wins when both are present, since paramsHex
+    // is the more specific binary form).
+    const paramsArg = paramsHex || params;
+    await cabi.CDHapiJob(sgbd, sgbdJob, paramsArg, "");
+  };
+
   const vm = new VM(ipo, {
     runtime: {
       ui,
@@ -155,6 +226,9 @@ export async function startNcsRuntime(cabdBasename: string): Promise<RuntimeHand
       sps: new NullSpsProvider(),
       nativeImports,
     },
+    systemFunctions: new Map<number, SystemFunctionOverride>([
+      [SystemFunction.exitwindows, apiJobOverride],
+    ]),
     debug: false,
     screenExecutor: { tickInterval: 50 },
   });
@@ -172,6 +246,7 @@ export async function startNcsRuntime(cabdBasename: string): Promise<RuntimeHand
   return {
     cabd: cabdBasename,
     vm,
+    cabi,
     ediabas: ediabasProvider,
     dispose: async () => {
       if (disposed) return;

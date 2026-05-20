@@ -59,6 +59,7 @@ export default defineConfig({
       "@emdzej/ncsx-ecu-select",
       "@emdzej/ncsx-fa-asw",
       "@emdzej/ncsx-identity",
+      "@emdzej/ncsx-inpax-cabi-provider",
       "@emdzej/ncsx-pfl",
       "@emdzej/ncsx-predicate",
       "@emdzej/ncsx-translations",
