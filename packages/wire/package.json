@@ -15,7 +15,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@emdzej/ediabasx-ediabas": "^0.2.1",
+    "@emdzej/ediabasx-ediabas": "^0.2.2",
     "@emdzej/ncsx-coder": "workspace:*"
   },
   "devDependencies": {
