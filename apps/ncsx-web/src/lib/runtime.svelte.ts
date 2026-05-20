@@ -233,6 +233,36 @@ export async function startNcsRuntime(
     await cabi.CDHapiJob(sgbd, sgbdJob, paramsArg, "");
   };
 
+  // 6a. PEM range overrides. Inpax binds slots 0x2B..0x3D to the INPA PEM
+  //     functions with hardcoded signatures like
+  //     `PEMInitialisiere(out: bool Result)`. NCSEXPER reuses these slot IDs
+  //     for different functions (per `docs/ncsexper-syscall-table.md` — the
+  //     PEM range is flagged "probably divergent" alongside the verified
+  //     0x0D divergence). The mismatch trips the dispatcher's `writeOutParams`
+  //     because NCSEXPER's IPO doesn't push an out-ref where INPA would.
+  //
+  //     A_*.ipo dispatchers hit these slots heavily during `__inpa_startup__`
+  //     and inside `TestCDHFehler`. We don't need protocol-report output, so
+  //     we register a no-op for the whole range. `opCall` calls `popFrame()`
+  //     after the override returns, which truncates the value stack back to
+  //     the FRAME marker — so args (and any out-refs that *were* pushed) get
+  //     cleaned up automatically.
+  //
+  //     Cost: any caller reading the bool "Result" out-param sees whatever
+  //     value was there before (typically false). For pure observability this
+  //     is fine; if a real handler depends on a `true` ack we'll need a more
+  //     careful override that writes through the ref.
+  const pemNoOp: SystemFunctionOverride = () => {
+    /* observability call — `opCall` popFrame cleans the args after we return */
+  };
+  const systemFunctions = new Map<number, SystemFunctionOverride>([
+    [SystemFunction.exitwindows, apiJobOverride],
+  ]);
+  for (let id = 0x2b; id <= 0x3d; id++) {
+    if (id === 0x35) continue; // gap in inpax's enum — leave default routing
+    systemFunctions.set(id, pemNoOp);
+  }
+
   const vm = new VM(ipo, {
     runtime: {
       ui,
@@ -245,9 +275,7 @@ export async function startNcsRuntime(
       external,
       sps: new NullSpsProvider(),
     },
-    systemFunctions: new Map<number, SystemFunctionOverride>([
-      [SystemFunction.exitwindows, apiJobOverride],
-    ]),
+    systemFunctions,
     debug: false,
     screenExecutor: { tickInterval: 50 },
   });
