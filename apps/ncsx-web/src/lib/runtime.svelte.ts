@@ -31,7 +31,6 @@
 import { parseIpo } from "@emdzej/inpax-parser";
 import { VM, MainScheduler, ExecutionContext } from "@emdzej/inpax-interpreter";
 import { SystemFunction, type FunctionBlock } from "@emdzej/inpax-core";
-import { WebUIProvider } from "@emdzej/inpax-web-provider";
 import { CabiProvider } from "@emdzej/ncsx-inpax-cabi-provider";
 
 /**
@@ -45,19 +44,16 @@ type SystemFunctionOverride = (
   vm: VM,
 ) => void | Promise<void>;
 import {
+  NullUIProvider,
   NullSimulationProvider,
   NullPrintProvider,
   NullPemProvider,
   NullDtmProvider,
+  NullExternalProvider,
   NullSpsProvider,
 } from "@emdzej/inpax-providers/null";
 import { EdiabasXProvider, Inp1Adapter } from "@emdzej/inpax-ediabasx-provider";
-import {
-  BrowserExternalProvider,
-  BrowserNativeImportProvider,
-} from "@emdzej/inpax-web-provider";
 import { Ediabas, type EdiabasConfig } from "@emdzej/ediabasx-ediabas";
-import { toInpaInstall } from "./inpa-install-adapter";
 import { app } from "./state.svelte";
 import { connection } from "./ediabas-session.svelte";
 
@@ -144,20 +140,22 @@ export async function startNcsRuntime(
   if (!app.install) {
     throw new Error("No install picked");
   }
-  const inpaInstall = toInpaInstall(app.install);
-  if (!inpaInstall.ecu) {
-    throw new Error("No EDIABAS/Ecu directory in the install");
-  }
 
   // 1. Read + parse the IPO.
   const ipoBytes = await loadIpoBytes(cabdBasename);
   const ipo = parseIpo(ipoBytes);
 
-  // 2. Providers. UI exists for state tracking even though we don't paint to it;
-  //    PEM/Print/Sim/Sps/Dtm are silent — ncsx's UI is Svelte-native, not the
-  //    INPA canvas.
-  const ui = new WebUIProvider();
-  const external = new BrowserExternalProvider();
+  // 2. Providers. A_*.ipo CABI dispatchers are batch / non-interactive — no
+  //    `setscreen` / `setmenu` / `userbox*` — so the UI and external providers
+  //    are pure no-ops here. (When we later wire Kernfunktionen, those IPOs
+  //    *are* interactive and will need a real UI provider — task #52.)
+  //
+  //    `@emdzej/inpax-web-provider` 0.6.0 ships `.svelte.ts` source files that
+  //    Svelte's `compileModule` can't parse (TypeScript syntax in module
+  //    files), so it can't be imported here. Null providers cover everything
+  //    A_*.ipo actually needs.
+  const ui = new NullUIProvider();
+  const external = new NullExternalProvider();
 
   // 3. EDIABAS — wrap the live instance from connection.session. `getTransport`
   //    returns null until the user connects; once connected, the provider's
@@ -176,18 +174,12 @@ export async function startNcsRuntime(
   });
   const inp1 = new Inp1Adapter(ediabasProvider);
 
-  // 4. Native imports — INI lookups (CALLE for INPA.INI / EDIABAS.INI). NCSEXPER's
-  //    A_*.ipo files do *some* INI lookups for chassis vocabulary; the provider
-  //    pre-fetches eagerly so the synchronous CALLE handler always has data.
-  const nativeImports = new BrowserNativeImportProvider({
-    install: inpaInstall,
-    ediabasConfig: {
-      ecuPath: inpaInstall.ecu.name,
-      interfaceName: "serial",
-      iniPath: "",
-    },
-  });
-  await nativeImports.prefetchIniFiles();
+  // 4. Native imports left undefined. `IInpaRuntime.nativeImports` is optional —
+  //    when unset the interpreter logs and pops the frame on CALLE, leaving
+  //    out-args untouched. A_*.ipo CABI dispatchers don't do INI lookups via
+  //    CALLE (those happen in NCSEXPER's C side around the IPO); if a specific
+  //    dispatcher does hit one, the log will tell us which import and we can
+  //    add a minimal inline stub then.
 
   // 5. CABI provider — owns the CDH* surface + the per-IPO context (current
   //    CABD basename, SGFAM row, chassis pointer). Currently focused on
@@ -252,7 +244,6 @@ export async function startNcsRuntime(
       dtm: new NullDtmProvider(),
       external,
       sps: new NullSpsProvider(),
-      nativeImports,
     },
     systemFunctions: new Map<number, SystemFunctionOverride>([
       [SystemFunction.exitwindows, apiJobOverride],

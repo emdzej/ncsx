@@ -29,7 +29,6 @@
     "@emdzej/inpax-parser": "^0.6.0",
     "@emdzej/inpax-providers": "^0.6.0",
     "@emdzej/inpax-ui-provider-core": "^0.6.0",
-    "@emdzej/inpax-web-provider": "^0.6.0",
     "@emdzej/ncsx-fa-asw": "workspace:*",
     "@emdzej/ncsx-function-list": "workspace:*",
     "@emdzej/ncsx-identity": "workspace:*",
