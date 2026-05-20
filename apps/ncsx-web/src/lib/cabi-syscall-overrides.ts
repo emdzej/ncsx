@@ -126,7 +126,8 @@ function writeOut(
  *     the page.
  */
 const SAFETY_CAP = 50_000;
-const YIELD_INTERVAL = 200;
+const YIELD_INTERVAL = 50;
+const TRACE_EVERY = 10;
 
 export function buildCabiSystemFunctions(
   cabi: CabiProvider,
@@ -134,13 +135,28 @@ export function buildCabiSystemFunctions(
 ): Map<number, SystemFunctionOverride> {
   const map = new Map<number, SystemFunctionOverride>();
   let count = 0;
+  const slotHits = new Map<number, number>();
   for (const slot of NCSEXPER_CABI_SLOTS) {
     const raw = makeOverride(slot, cabi, opts);
     map.set(slot.id, async (ctx, vm) => {
       count++;
+      slotHits.set(slot.id, (slotHits.get(slot.id) ?? 0) + 1);
       if (count > SAFETY_CAP) {
+        const top = [...slotHits.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([id, n]) => `0x${id.toString(16)}=${n}`)
+          .join(" ");
         throw new Error(
-          `[cabi-syscall] safety cap (${SAFETY_CAP}) hit — IPO is likely in a runaway loop. Last slot: 0x${slot.id.toString(16)} ${slot.name}`,
+          `[cabi-syscall] safety cap (${SAFETY_CAP}) hit — last slot 0x${slot.id.toString(16)} ${slot.name}. Top: ${top}`,
+        );
+      }
+      if (count <= 80 || count % TRACE_EVERY === 0) {
+        // Verbose first 80 syscalls, then every 10th after — keeps the
+        // console readable while preserving the full picture of a busy
+        // loop's footprint.
+        console.log(
+          `[cabi #${count}] 0x${slot.id.toString(16).padStart(2, "0")} ${slot.name}  (stack ${ctx.stack.size}, frame ${ctx.frameOffset})`,
         );
       }
       if (count % YIELD_INTERVAL === 0) {
