@@ -1,0 +1,60 @@
+Hunt for [reg+0x50] writes in .text
+
+--- C7 41 50 imm32
+
+--- C7 42 50 imm32
+
+--- C7 43 50 imm32
+
+--- C7 45 50 imm32
+
+--- C7 46 50 imm32
+
+--- C7 47 50 imm32
+
+--- 89 41 50
+  0x0052c8cb in FUN_0052c88f                    -> [reg+0x50] = <reg>
+
+--- 89 42 50
+  0x00550e97 in SetImageInternal                -> [reg+0x50] = <reg>
+
+--- 89 43 50
+  0x00419704 in FUN_00418d20                    -> [reg+0x50] = <reg>
+  0x0048ec2a in SetIndicators                   -> [reg+0x50] = <reg>
+  0x00511118 in FUN_005110ad                    -> [reg+0x50] = <reg>
+  0x005115b9 in CMFCToolBarImages               -> [reg+0x50] = <reg>
+  0x0051f7ef in ReposPalette                    -> [reg+0x50] = <reg>
+  0x0055c786 in MoveDragFrame                   -> [reg+0x50] = <reg>
+
+--- 89 45 50
+
+--- 89 46 50
+  0x00417379 in FUN_00417110                    -> [reg+0x50] = <reg>
+  0x00464f69 in FUN_00464c50                    -> [reg+0x50] = <reg>
+  0x0047d4bd in CWnd                            -> [reg+0x50] = <reg>
+  0x0047eb73 in CWnd                            -> [reg+0x50] = <reg>
+  0x0047fedc in <unowned>                       -> [reg+0x50] = <reg>
+  0x004a0700 in CMFCBaseVisualManager           -> [reg+0x50] = <reg>
+  0x004b2c15 in CWinApp                         -> [reg+0x50] = <reg>
+  0x004bdd7f in UpdateSysColors                 -> [reg+0x50] = <reg>
+  0x004e912c in CopyFrom                        -> [reg+0x50] = <reg>
+  0x0050e243 in SetSingleImage                  -> [reg+0x50] = <reg>
+  0x0050e828 in FUN_0050e78f                    -> [reg+0x50] = <reg>
+  0x0050f903 in CopyTo                          -> [reg+0x50] = <reg>
+  0x0051fbe6 in ReposPalette                    -> [reg+0x50] = <reg>
+  0x0051ffa7 in ReposPalette                    -> [reg+0x50] = <reg>
+  0x0053c986 in LoadTemplate                    -> [reg+0x50] = <reg>
+  0x00541a42 in SetCurrentHandles               -> [reg+0x50] = <reg>
+  0x0055100f in SetImageInternal                -> [reg+0x50] = <reg>
+  0x005566ce in CMFCToolBarDropSource           -> [reg+0x50] = <reg>
+  0x0055c5cd in PlaceTabPreDocking              -> [reg+0x50] = <reg>
+  0x0055f65c in GetProcAddress_ImageList_Remove  -> [reg+0x50] = <reg>
+
+--- 89 47 50
+  0x00401d84 in FUN_00401d40                    -> [reg+0x50] = <reg>
+  0x0050ee3d in FUN_0050e898                    -> [reg+0x50] = <reg>
+  0x0051bf96 in RepositionMenu                  -> [reg+0x50] = <reg>
+  0x0051ebcb in CopyFrom                        -> [reg+0x50] = <reg>
+  0x00556748 in OnBeginDrag                     -> [reg+0x50] = <reg>
+
+Done. Imm-stores: 0, reg-stores: 33

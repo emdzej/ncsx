@@ -151,16 +151,24 @@ export const NCSEXPER_SYSCALL_TABLE: Record<number, NcsexperSyscallEntry> = {
   },
   0x0d: {
     id: 0x0d,
-    inpaName: 'exitwindows',
-    signature: '() → void',
-    verified: 'verified-same',
+    inpaName: 'exitwindows  (compile-time keyword)',
+    signature: '(string jobLabel, string sgbdJob, string params, string paramsHex) — at runtime',
+    verified: 'divergent',
     evidence:
-      "Confirmed via NCSEXPER.EXE's own embedded v1.x IPS compiler keyword table: " +
-      "string 'exitwindows' at .rdata offset 0x48dde0 — 13th position in the table starting at " +
-      "0x48dd34. Matches inpax-core's v5.x ID 0x0D. The 4-LOAD-then-CALL pattern in FgnrLesen " +
-      "is stack manipulation for downstream ops, NOT args to exitwindows. " +
-      "Independently confirmed in INPACOMP.exe (v5.x reference compiler) at the same position. " +
-      "See docs/ncsexper-syscall-table.md.",
+      "DIVERGENT — interpreter dispatch at slot 0x0D is the apiJob bridge, NOT exitwindows. " +
+      "Compile-time keyword 'exitwindows' maps to ID 0x0D in INPA's IPS compiler keyword table " +
+      "(NCSEXPER.EXE 0x48dde0 — but that's only in INPA.EXE, not NCSEXPER.EXE). However the RUNTIME " +
+      "interpreter dispatches slot 0x0D to a handler that takes 4 string args and triggers EDIABAS " +
+      "apiJob via api32.dll. Evidence (A_KMB46.ipo::FgnrLesen):\n" +
+      "  0011: CALL sys 0x0D (with 4 args: JOBNAME, sgbdJob, params, paramsHex)\n" +
+      "  001c: CALL user TestApiFehler  ← checks api32.dll error state\n" +
+      "  0022: CALL sys scriptchange ('FG_NR', 1, '')\n" +
+      "TestApiFehler immediately after 0x0D is the smoking gun — that user function exists to " +
+      "validate apiJob success. The per-CABD job-name translation (FGNR_LESEN → C_FG_LESEN) is " +
+      "hardcoded as arg 2 inside A_*.ipo at compile time — each CABD's IPO ships its own mapping. " +
+      "Earlier 'verified-same' verdict (2026-05-20) was WRONG — based on conflating the compiler's " +
+      "name→ID keyword table with the interpreter's ID→handler dispatch table.",
+    handler: 'CabiProvider.CDHapiJob',
   },
   0x0e: {
     id: 0x0e,

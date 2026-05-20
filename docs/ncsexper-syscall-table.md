@@ -66,12 +66,50 @@ called by `A_KMB46.ipo`. Each entry has:
 
 ---
 
-## Resolved: v1.x and v5.x share the same syscall ID space for shared names
+## Final verdict (2026-05-20)
 
-**Proof from NCSEXPER.EXE directly** — NCSEXPER embeds its own v1.x IPS
-compiler / emitter, and the keyword table is laid out in `.rdata` at
-consecutive addresses starting `0x48dd34`. The position of each string in
-the table corresponds directly to its v1.x system-function ID:
+**Slot `0x0D` in NCSEXPER's runtime IPO interpreter takes 4 string args
+and is the apiJob bridge.** Direct evidence from `A_KMB46.ipo::FgnrLesen`:
+
+```
+000c: FRAME              ← marks the start of an arg-push region
+000d: LOAD local[0]      ← arg 1 (JOBNAME from cabimain arg)
+000e: LOAD const "C_FG_LESEN"   ← arg 2 (SGBD-side job name)
+000f: LOAD const ""       ← arg 3 (params)
+0010: LOAD const ""       ← arg 4 (paramsHex)
+0011: CALL sys 0x0D       ← consumes ALL 4 args (FRAME→CALL bracket)
+...
+001c: CALL user TestApiFehler   ← validates api32.dll error state — proves 0x0D hit EDIABAS
+```
+
+The IPO bytecode's `FRAME → … → CALL` is a hard bracket: every LOAD/PUSHREF
+between FRAME and the next CALL is an arg to that CALL. INPA's `exitwindows`
+takes 0 args; slot 0x0D in NCSEXPER takes 4. The behaviour the IPO clearly
+expects is `apiJob(jobLabel, sgbdJob, params, paramsHex)`, and the
+`TestApiFehler` user function immediately after seals it — that function
+exists precisely to check EDIABAS error state.
+
+**The compile-time keyword `exitwindows` at INPA's IPS-compiler keyword
+table position 0x0D is a Softing-internal naming quirk** — the compiler
+emits the same numeric ID, but the runtime handler has nothing to do with
+"closing windows". Likely historical: the keyword was repurposed when the
+EDIABAS bridge needed a slot, but Softing kept the old name in the lexer.
+
+## Compile-time keyword table vs runtime dispatch table — two different things
+
+**Proof from INPA.EXE (NOT NCSEXPER.EXE)**: INPA embeds an IPS compiler
+with a keyword table at `.rdata` `0x48dd34`. The position of each string
+gives the **compile-time ID assignment** the compiler emits for that
+keyword. **This is NOT the same as the runtime interpreter's
+ID→handler dispatch table.** They can (and do, at slot 0x0D) diverge.
+
+NCSEXPER.EXE does NOT embed the compiler — only the interpreter. Earlier
+claim that "NCSEXPER.EXE has the v1.x keyword table" was wrong; those
+strings exist only in INPA.EXE. The Softing static library that both
+binaries share is the **runtime interpreter** (`CInterpreter::DoInterpret`
+at `FUN_0045d830` in both), not the compiler.
+
+The INPA keyword table:
 
 ```
 0x48dd34  setmenutitle       = 0x00
@@ -136,49 +174,82 @@ The whole reason this matters is the dispatch:
 So **the ghidra table dump is necessary**, not optional, even though we
 now have inpax-compiler / inpax-interpreter both wired to v5.x assumptions.
 
-### Why I previously thought slot `0x0D` diverged (and why I was wrong)
+### Slot 0x0D IS the apiJob bridge (third and final verdict)
 
-`FgnrLesen` at offset 0x11 has this sequence:
+I've flip-flopped on this twice. Locking it now with the evidence that
+finally fits:
+
+`A_KMB46.ipo::FgnrLesen` at offset 0x11 has this sequence:
 
 ```
-LOAD local[0]              ; JOBNAME (from cabimain arg)
-LOAD const "C_FG_LESEN"    ; SGBD-side job name
-LOAD const ""
-LOAD const ""
-CALL sys 0x000D
+LOAD local[0]              ; JOBNAME (from cabimain arg, e.g. "FGNR_LESEN")
+LOAD const "C_FG_LESEN"    ; SGBD-side job name (per-CABD hardcoded constant)
+LOAD const ""              ; params
+LOAD const ""              ; paramsHex
+CALL sys 0x0D              ; → apiJob bridge
+...
+CALL user TestApiFehler    ; checks api32.dll error state (← smoking gun)
+...
+CALL sys scriptchange "FG_NR"   ; chain to FG_NR sub-script for next stage
 ```
 
-I read this as "4-arg apiJob call at slot 0x0D" → therefore NCSEXPER
-diverges from INPA where 0x0D is exitwindows. **The INPACOMP keyword-order
-evidence rules that out.** Slot 0x0D is `exitwindows` in NCSEXPER too.
+**The smoking gun**: `TestApiFehler` (a user-defined function whose name
+literally means "Test API Error") runs immediately after `CALL sys 0x0D`.
+It exists to validate that the preceding API call succeeded. That API is
+EDIABAS / `api32.dll`. The only way slot 0x0D could plausibly set that
+error state is if it issued `apiJob`.
 
-So what ARE those 4 LOADs? Most likely **stack preparation for a
-sequence of downstream operations** — IPO bytecode is stack-based and the
-operand stack can accumulate values across multiple instructions before
-they're consumed. `exitwindows` itself takes 0 args; the LOADs are
-populating data for whatever runs after.
+This also makes the C-code analysis tractable: I'd been looking for an
+`apiJob` call in NCSEXPER.EXE's COAPI helpers (`coapiReadFgNr` →
+`coapiRunCabd` → IPO loop) and finding none. The reason is that the
+`apiJob` happens **inside the IPO interpreter**, when slot 0x0D dispatches.
+The C code never directly calls api32.dll — it routes everything through
+the IPO interpreter's slot 0x0D handler.
 
-Confirmed by: A_KMB46.ipo has **zero** `CALL sys 0x62` (INPAapiJob)
-invocations. The IPO never calls apiJob at all. NCSEXPER's COAPI does it
-in C code via `FUN_00433a70`'s callees, BEFORE running the IPO. The IPO
-is purely observability / state-machine / scriptchange orchestration.
+### Why earlier evidence misled me
+
+INPA.EXE has an embedded IPS compiler whose keyword table sits at
+`.rdata` `0x48dd34`. That table maps **keywords to IDs at compile time**:
+
+```
+0x48dd34  setmenutitle  → 0x00
+0x48dde0  exitwindows   → 0x0D
+0x48e268  INPAapiJob    → 0x62
+```
+
+So when you write `exitwindows()` in IPS source, the compiler emits
+`CALL sys 0x0D`. But **the runtime interpreter's table at slot 0x0D
+dispatches to a DIFFERENT handler than INPA's `exitwindows`**. Likely
+the keyword "exitwindows" in v1.x is a vestigial / repurposed name that
+was reused for the apiJob bridge in the runtime — a Softing-internal
+naming inconsistency.
+
+The compile-time table I extracted from INPACOMP.exe and NCSEXPER.EXE
+*.rdata*. The runtime dispatch table lives in `CInterpreter::this+0x50`
+and isn't directly enumerable without running the binary or walking the
+constructor's `mov [this+0x50], ...` writes in ghidra. **Until that
+runtime table is dumped (via the ghidra script in
+`docs/scripts/dump-ncsexper-syscall-table.py`), slot 0x0D's true handler
+is best inferred from IPO usage shape, not from compile-time keywords.**
 
 ### Where the per-CABD job-name translation actually lives
 
-The strings `"C_FG_LESEN"`, `"C_S_LESEN"`, `"C_S_SCHREIBEN"`, etc. inside
-`A_KMB46.ipo` are PEM-report labels or scriptchange targets, not args to
-`apiJob`. The real per-CABD translation lives in one of:
+Resolved: **inside each `A_*.ipo` as a hardcoded constant**.
 
-- **The SGBD `.prg` itself** — EDIABAS supports job aliases. `KOMBI46R.PRG`
-  likely declares `FGNR_LESEN` as an alias for `C_FG_LESEN` inside its
-  BEST/2 job-table. NCSEXPER's COAPI calls `apiJob(KOMBI46R, "FGNR_LESEN")`
-  and the SGBD interpreter resolves the alias internally.
-- **NCSEXPER's COAPI C code** — `FUN_00433a70` may look up the
-  CABD-specific name from a static table before calling apiJob.
+- `A_KMB46.ipo::FgnrLesen` loads `"C_FG_LESEN"` and passes it as arg 2 to
+  `CALL sys 0x0D` (the apiJob bridge).
+- `A_KMB46.ipo::Lesen` (CODIERDATEN_LESEN handler) loads `"C_S_LESEN"`.
+- Other CABDs ship their own `A_*.ipo` with different hardcoded names.
+- **The IPO IS the per-CABD mapping table**, compiled in at IPS-to-IPO
+  emission time.
 
-Both are plausible; only one is true; **resolving which is a follow-up
-investigation**. Either way, the IPO's `cabimain` dispatcher isn't
-doing the translation — it's just orchestration.
+This means our existing `packages/wire`'s direct `apiJob` calls with
+the contract names (`FGNR_LESEN`, `SG_CODIEREN`, etc.) will **only**
+work if the SGBD `.prg` itself aliases the contract names to the
+implementation names. That's testable via `apiJobInfo` against a live
+SGBD. If aliases work → `packages/wire` works as-is. If not → we MUST
+run the IPO via inpax-interpreter (with our `CabiProvider.CDHapiJob`
+bound to slot 0x0D) to get the right SGBD-side names.
 
 ---
 
