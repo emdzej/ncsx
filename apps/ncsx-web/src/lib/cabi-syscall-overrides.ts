@@ -180,12 +180,21 @@ function makeOverride(
       return async (ctx) => {
         const args = popArgs(ctx, slot.params);
         const ecu = String(args.ecu || opts.defaultSgbd);
-        await cabi.CDHapiJob(
-          ecu,
-          String(args.job),
-          String(args.para),
-          String(args.result),
+        const job = String(args.job);
+        const para = String(args.para);
+        const result = String(args.result);
+        console.log(`[apiJob] → ecu=${ecu} job=${job} para=${para || "(none)"} result=${result || "(none)"}`);
+        const t0 = performance.now();
+        const timeout = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`apiJob timeout after 10s: ${ecu}/${job}`)), 10_000),
         );
+        try {
+          await Promise.race([cabi.CDHapiJob(ecu, job, para, result), timeout]);
+          console.log(`[apiJob] ✓ done (${(performance.now() - t0).toFixed(0)}ms)  status=${cabi.lastJobStatus}`);
+        } catch (err) {
+          console.error(`[apiJob] ✗ failed (${(performance.now() - t0).toFixed(0)}ms):`, err);
+          throw err;
+        }
       };
 
     case "CDHapiInit":
