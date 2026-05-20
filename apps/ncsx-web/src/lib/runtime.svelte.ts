@@ -248,9 +248,7 @@ export async function startNcsRuntime(
   //    Startup must complete first — `__inpa_startup__` writes constants /
   //    globals that the cabimain switch reads from.
   const runCabimain = async (jobName: string): Promise<void> => {
-    console.log(`[ncsx-runtime] runCabimain('${jobName}') — awaiting startup`);
     await startupPromise;
-    console.log(`[ncsx-runtime] runCabimain('${jobName}') — startup done, dispatching`);
     let cabimain: FunctionBlock | undefined;
     for (const block of vm.getIpo().functions.values()) {
       if (block.header.name === "cabimain") {
@@ -272,13 +270,7 @@ export async function startNcsRuntime(
     await cabi.CDHSetCabdPar("JOBNAME", jobName);
     const ctx = vm.createExecutionContext();
     ctx.pushString(jobName);
-    try {
-      await vm.executeBlockWithContext(cabimain, ctx);
-      console.log(`[ncsx-runtime] runCabimain('${jobName}') — completed cleanly`);
-    } catch (err) {
-      console.error(`[ncsx-runtime] runCabimain('${jobName}') — threw:`, err);
-      throw err;
-    }
+    await vm.executeBlockWithContext(cabimain, ctx);
   };
 
   let disposed = false;

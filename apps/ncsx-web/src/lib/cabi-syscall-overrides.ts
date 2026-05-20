@@ -71,6 +71,28 @@ export interface CabiOverrideOptions {
  * `out`/`inout` params resolve to a `StackEntry` ref we can write
  * back to via `ctx.setOutParam(ref, ...)`.
  */
+/**
+ * Hex preview of a JS string read as a byte sequence (each char's
+ * `codePointAt(0)` treated as the byte). Kept around for ad-hoc
+ * debugging — drop a `console.log(hexPreview(str))` into an override
+ * to spot truncation / re-encoding when a binary blob round-trips
+ * EDIABAS → IPO local → apiJob param. Originally added to chase the
+ * FA_STREAM2STRUCT hand-off before the ediabasx 0.2.2 / CABI provider
+ * semicolon-split fix; left exported so consumers can pull it in
+ * without re-deriving it.
+ */
+export function hexPreview(s: string, head = 24, tail = 24): string {
+  if (!s) return '(empty)';
+  const codes = [...s].map((c) => c.codePointAt(0)!);
+  const toHex = (n: number) => n.toString(16).padStart(n > 0xff ? 4 : 2, '0').toUpperCase();
+  if (codes.length <= head + tail + 4) {
+    return `len=${codes.length} bytes=${codes.map(toHex).join(' ')}`;
+  }
+  const front = codes.slice(0, head).map(toHex).join(' ');
+  const back = codes.slice(-tail).map(toHex).join(' ');
+  return `len=${codes.length} head=[${front}] tail=[${back}]`;
+}
+
 function popArgs(
   ctx: ExecutionContext,
   params: readonly CabiParam[],
@@ -127,7 +149,6 @@ function writeOut(
  */
 const SAFETY_CAP = 50_000;
 const YIELD_INTERVAL = 50;
-const TRACE_EVERY = 10;
 
 export function buildCabiSystemFunctions(
   cabi: CabiProvider,
@@ -149,14 +170,6 @@ export function buildCabiSystemFunctions(
           .join(" ");
         throw new Error(
           `[cabi-syscall] safety cap (${SAFETY_CAP}) hit — last slot 0x${slot.id.toString(16)} ${slot.name}. Top: ${top}`,
-        );
-      }
-      if (count <= 80 || count % TRACE_EVERY === 0) {
-        // Verbose first 80 syscalls, then every 10th after — keeps the
-        // console readable while preserving the full picture of a busy
-        // loop's footprint.
-        console.log(
-          `[cabi #${count}] 0x${slot.id.toString(16).padStart(2, "0")} ${slot.name}  (stack ${ctx.stack.size}, frame ${ctx.frameOffset})`,
         );
       }
       if (count % YIELD_INTERVAL === 0) {
@@ -183,16 +196,10 @@ function makeOverride(
         const job = String(args.job);
         const para = String(args.para);
         const result = String(args.result);
-        console.log(`[apiJob] → ecu=${ecu} job=${job} para=${para || "(none)"} result=${result || "(none)"}`);
-        const t0 = performance.now();
-        const timeout = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`apiJob timeout after 10s: ${ecu}/${job}`)), 10_000),
-        );
         try {
-          await Promise.race([cabi.CDHapiJob(ecu, job, para, result), timeout]);
-          console.log(`[apiJob] ✓ done (${(performance.now() - t0).toFixed(0)}ms)  status=${cabi.lastJobStatus}`);
+          await cabi.CDHapiJob(ecu, job, para, result);
         } catch (err) {
-          console.error(`[apiJob] ✗ failed (${(performance.now() - t0).toFixed(0)}ms):`, err);
+          console.error(`[apiJob] ${ecu}/${job} failed:`, err);
           throw err;
         }
       };
