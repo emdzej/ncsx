@@ -1,33 +1,43 @@
-// FindCabiSyscallTable.java — locate NCSEXPER.EXE's CABI syscall-table array.
+// FindCabiSyscallTable.java — locate NCSEXPER.EXE's CABI syscall-table.
 //
-// Strategy:
-//   1. Treat the apiJob handler at 0x0044be90 as a known anchor (identified
-//      by reading its body: pops 4 string args via FUN_0045efa0, calls the
-//      apiJob bridge chain → ___apiJob).
-//   2. Scan every defined data block (.data + .rdata) for any 4-byte word
-//      equal to that handler address. The match address sits inside the
-//      syscall table.
-//   3. From each match, walk backwards and forwards in 4-byte steps as
-//      long as each word points into the .text range (any function in the
-//      program). The contiguous run of function pointers is the table.
-//   4. Print each entry as `[slot] addr -> handler addr (name if known)`.
-//      Cross-check the slot index of 0x0044be90 against the empirical
-//      apiJob slot 0x0D — if they match, we've found the table.
+// V2 strategy: the first pass only found one isolated word equal to the
+// apiJob handler address — meaning the table isn't a flat absolute-pointer
+// array. It's likely built up by individual MOV instructions in
+// CInterpreter's constructor (`mov [edi+N*4], imm32`), so we hunt for those
+// instead, AND we dump raw bytes around any data-side hit so we can see
+// what shape the data actually has.
 //
-// Run from Ghidra: File → Configure → Script Manager → ＋, paste this file,
-// then Run. Output goes to the Script Manager console.
+// Three searches in one pass:
+//
+//   A) `.data` / `.rdata` 4-byte words == 0x0044be90 (absolute pointer).
+//      We did this in v1 — there's one hit at 0x00603a2c. Dump the
+//      surrounding 0x40 bytes both ways as raw u32 hex so the layout is
+//      visible.
+//
+//   B) `.data` / `.rdata` 4-byte words == apiJob's RVA (0x000be90 = handler
+//      - 0x00400000), in case the table stores RVAs.
+//
+//   C) `.text` immediate operands == 0x0044be90 anywhere in the binary.
+//      Scans for the byte pattern `90 BE 44 00` aligned to any offset.
+//      Reports each match with the surrounding instruction context. If
+//      the table is populated via `mov [reg+N], 0x0044be90`, every entry
+//      is its own immediate write — and the surrounding code reveals the
+//      base register + offset.
+//
+// Run from Ghidra Script Manager. Paste, hit Run, capture console output.
 //
 //@author ncsx
 //@category NCSX
 
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.address.AddressIterator;
-import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
+import ghidra.program.model.listing.Listing;
+import ghidra.program.model.listing.Instruction;
+import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.program.model.symbol.SymbolTable;
 
@@ -36,13 +46,9 @@ import java.util.List;
 
 public class FindCabiSyscallTable extends GhidraScript {
 
-    // Known apiJob handler in NCSEXPER.EXE. Identified manually by reading
-    // FUN_0044be90's body: pops 4 string args (FUN_0045efa0(0..3)), invokes
-    // FUN_0045ee30 -> FUN_00478c70 -> ___apiJob_20.
     private static final long APIJOB_HANDLER = 0x0044be90L;
-
-    // NCSEXPER.EXE .text range — adjust if image base differs. Default
-    // image base 0x400000 + standard MFC image, .text ends around 0x5ad9ff.
+    private static final long IMAGE_BASE = 0x00400000L;
+    private static final long APIJOB_RVA = APIJOB_HANDLER - IMAGE_BASE;
     private static final long TEXT_MIN = 0x00401000L;
     private static final long TEXT_MAX = 0x005ad9ffL;
 
@@ -51,20 +57,75 @@ public class FindCabiSyscallTable extends GhidraScript {
         Memory mem = currentProgram.getMemory();
         FunctionManager funcMgr = currentProgram.getFunctionManager();
         SymbolTable symTab = currentProgram.getSymbolTable();
+        Listing listing = currentProgram.getListing();
 
-        Address apiJob = toAddr(APIJOB_HANDLER);
-        println(String.format("Searching for syscall table containing apiJob @ 0x%08x", APIJOB_HANDLER));
+        println(String.format("Anchor: apiJob handler @ 0x%08x", APIJOB_HANDLER));
+        println(String.format("        as RVA              0x%08x", APIJOB_RVA));
+        println("");
 
-        // 1. Find every 4-byte word in .data/.rdata equal to apiJob's address.
+        // === A) absolute-pointer hits in .data / .rdata =========================
+        println("[A] absolute-pointer (0x" + Long.toHexString(APIJOB_HANDLER) + ") hits in .data/.rdata:");
+        List<Address> absHits = scanWords(mem, APIJOB_HANDLER, /*dataOnly=*/ true);
+        println(String.format("    %d hits", absHits.size()));
+        for (Address hit : absHits) {
+            println("");
+            println("    hit @ 0x" + hit.toString(false));
+            dumpAround(mem, hit, 0x20);    // ± 0x20 bytes
+            tryExpandTable(mem, funcMgr, symTab, hit);
+        }
+        println("");
+
+        // === B) RVA hits ========================================================
+        println("[B] RVA (0x" + Long.toHexString(APIJOB_RVA) + ") hits in .data/.rdata:");
+        List<Address> rvaHits = scanWords(mem, APIJOB_RVA, /*dataOnly=*/ true);
+        println(String.format("    %d hits", rvaHits.size()));
+        for (Address hit : rvaHits) {
+            println("");
+            println("    hit @ 0x" + hit.toString(false));
+            dumpAround(mem, hit, 0x20);
+        }
+        println("");
+
+        // === C) immediate-operand hits in .text =================================
+        println("[C] immediate-operand (mov reg/[m], 0x" + Long.toHexString(APIJOB_HANDLER) + ") hits in .text:");
+        int instrHits = 0;
+        for (Instruction insn = listing.getInstructionAt(toAddr(TEXT_MIN));
+             insn != null && insn.getAddress().getOffset() <= TEXT_MAX;
+             insn = listing.getInstructionAfter(insn.getAddress())) {
+            // Walk all scalar operands; skip references that are program-flow
+            // (call targets), only flag immediate values.
+            int nOps = insn.getNumOperands();
+            for (int i = 0; i < nOps; i++) {
+                Object[] objs = insn.getOpObjects(i);
+                if (objs == null) continue;
+                for (Object o : objs) {
+                    if (o instanceof Scalar) {
+                        long val = ((Scalar) o).getUnsignedValue();
+                        if (val == APIJOB_HANDLER) {
+                            Function inFn = funcMgr.getFunctionContaining(insn.getAddress());
+                            String fnName = inFn != null ? inFn.getName() : "<no fn>";
+                            println(String.format(
+                                "    0x%s  in %s :  %s",
+                                insn.getAddress().toString(false),
+                                fnName,
+                                insn.toString()));
+                            instrHits++;
+                        }
+                    }
+                }
+            }
+        }
+        println(String.format("    %d instruction hits", instrHits));
+    }
+
+    private List<Address> scanWords(Memory mem, long target, boolean dataOnly) throws Exception {
         List<Address> hits = new ArrayList<>();
         for (MemoryBlock block : mem.getBlocks()) {
             if (!block.isInitialized()) continue;
-            String name = block.getName().toLowerCase();
-            if (!name.contains("data") && !name.contains("rdata")) continue;
-            println(String.format("  scanning block %s [0x%s..0x%s]",
-                block.getName(),
-                block.getStart().toString(false),
-                block.getEnd().toString(false)));
+            if (dataOnly) {
+                String n = block.getName().toLowerCase();
+                if (!n.contains("data") && !n.contains("rdata")) continue;
+            }
             Address start = block.getStart();
             Address end = block.getEnd().subtract(4);
             for (Address a = start; a.compareTo(end) <= 0; a = a.add(4)) {
@@ -74,97 +135,63 @@ public class FindCabiSyscallTable extends GhidraScript {
                 } catch (Exception e) {
                     continue;
                 }
-                if (w == APIJOB_HANDLER) {
-                    hits.add(a);
-                }
+                if (w == target) hits.add(a);
             }
         }
-        println(String.format("Found %d candidate hits", hits.size()));
+        return hits;
+    }
 
-        // 2. For each hit, walk back/forward expanding while each word is a
-        //    plausible .text address.
-        for (Address hit : hits) {
-            println("");
-            println(String.format("=== hit @ 0x%s ===", hit.toString(false)));
-
-            Address back = hit;
-            while (true) {
-                Address prev = back.subtract(4);
+    private void dumpAround(Memory mem, Address center, int radius) {
+        long start = center.getOffset() - radius;
+        long end = center.getOffset() + radius;
+        // align to 16
+        start = start & ~0xfL;
+        for (long off = start; off <= end; off += 16) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("      0x%08x: ", off));
+            for (int i = 0; i < 4; i++) {
                 long w;
                 try {
-                    w = mem.getInt(prev) & 0xffffffffL;
+                    w = mem.getInt(toAddr(off + i * 4)) & 0xffffffffL;
                 } catch (Exception e) {
-                    break;
-                }
-                if (!isTextAddr(w)) break;
-                back = prev;
-            }
-
-            Address fwd = hit;
-            while (true) {
-                Address next = fwd.add(4);
-                long w;
-                try {
-                    w = mem.getInt(next) & 0xffffffffL;
-                } catch (Exception e) {
-                    break;
-                }
-                if (!isTextAddr(w)) break;
-                fwd = next;
-            }
-
-            long entries = (fwd.subtract(back) / 4) + 1;
-            println(String.format("  table candidate: 0x%s .. 0x%s  (%d entries)",
-                back.toString(false), fwd.toString(false), entries));
-
-            // Skip obvious non-table runs (too short).
-            if (entries < 16) {
-                println("  (skipped — too short)");
-                continue;
-            }
-
-            // 3. Print each entry. Show the slot index, the .data address,
-            //    the handler .text address, and any symbol/function name.
-            int apiJobSlot = -1;
-            for (int i = 0; i < entries; i++) {
-                Address slotAddr = back.add((long) i * 4);
-                long handlerVal;
-                try {
-                    handlerVal = mem.getInt(slotAddr) & 0xffffffffL;
-                } catch (Exception e) {
+                    sb.append("???????? ");
                     continue;
                 }
-                Address handlerAddr = toAddr(handlerVal);
-                Function fn = funcMgr.getFunctionAt(handlerAddr);
-                String label = fn != null ? fn.getName() : "<no fn>";
-                Symbol sym = symTab.getPrimarySymbol(handlerAddr);
-                if (sym != null && fn == null) label = sym.getName();
-                println(String.format("  [0x%02x] @0x%s -> 0x%08x  %s",
-                    i, slotAddr.toString(false), handlerVal, label));
-                if (handlerVal == APIJOB_HANDLER) apiJobSlot = i;
+                String marker = (off + i * 4 == center.getOffset()) ? "*" : " ";
+                sb.append(String.format("%s%08x ", marker, w));
             }
-            if (apiJobSlot >= 0) {
-                println(String.format("  >> apiJob (0x%08x) sits at slot 0x%02x in this table",
-                    APIJOB_HANDLER, apiJobSlot));
-                if (apiJobSlot == 0x0D) {
-                    println("  >> matches empirical evidence — THIS IS THE CABI SYSCALL TABLE");
-                }
-            }
-        }
-
-        if (hits.isEmpty()) {
-            println("");
-            println("No matches found. Possibilities:");
-            println("  - The table holds offsets, not absolute addresses.");
-            println("  - The table is heap-allocated and the entries are written");
-            println("    one at a time via repeated `mov [esi+N*4], imm32` rather");
-            println("    than memcpy from a .rdata source. In that case, search");
-            println("    .text for any `mov [reg+0x?], 0x0044be90` immediate write.");
-            println("  - The image base differs from 0x00400000.");
+            println(sb.toString());
         }
     }
 
-    private boolean isTextAddr(long v) {
-        return v >= TEXT_MIN && v <= TEXT_MAX;
+    private void tryExpandTable(Memory mem, FunctionManager funcMgr, SymbolTable symTab, Address hit) throws Exception {
+        // Walk back/forward keeping entries that point into .text.
+        Address back = hit;
+        while (true) {
+            Address prev = back.subtract(4);
+            long w;
+            try {
+                w = mem.getInt(prev) & 0xffffffffL;
+            } catch (Exception e) {
+                break;
+            }
+            if (w < TEXT_MIN || w > TEXT_MAX) break;
+            back = prev;
+        }
+        Address fwd = hit;
+        while (true) {
+            Address next = fwd.add(4);
+            long w;
+            try {
+                w = mem.getInt(next) & 0xffffffffL;
+            } catch (Exception e) {
+                break;
+            }
+            if (w < TEXT_MIN || w > TEXT_MAX) break;
+            fwd = next;
+        }
+        long entries = (fwd.subtract(back) / 4) + 1;
+        println(String.format("      contiguous text-pointer run: 0x%s..0x%s  (%d entries)",
+            back.toString(false), fwd.toString(false), entries));
     }
 }
