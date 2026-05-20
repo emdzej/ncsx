@@ -50,6 +50,63 @@ function looksLikeVin(s: string): boolean {
   return s.length === 17 && /^[A-HJ-NPR-Z0-9]{17}$/.test(s) && !/^0+$/.test(s);
 }
 
+/**
+ * Placeholder prefix NCSEXPER's `coapiSetFgNr` (NCSEXPER.EXE `0x0042a560`)
+ * uses to pad the 7-char ECU FGNR into a 17-char VIN-shaped string.
+ * Positions 1-3 = "WBA" (BMW AG WMI), positions 4-10 = "AA00000" (filler
+ * — NOT derived from FA/chassis; NCSEXPER doesn't reconstruct the real
+ * mid-VIN). The 7-char FGNR substitutes positions 11-17.
+ */
+const NCSEXPER_VIN_PLACEHOLDER = 'WBAAA00000';
+
+/**
+ * Replicate NCSEXPER's `coapiSetFgNr` padding so `FAHRGESTELL_NR` reads
+ * out as a 17-character string regardless of what the cluster actually
+ * returned.
+ *
+ * - **7 chars in** (typical ECU response — the bare Fahrgestellnummer):
+ *   prepend `"WBAAA00000"` placeholder → 17 chars. **Not a real VIN** —
+ *   the middle 10 characters are stub. NCSEXPER's UI displays this same
+ *   synthetic string and labels it "VIN".
+ * - **17 chars in**: pass through as-is.
+ * - **18 chars in**: drop the trailing check-digit byte that some SGs
+ *   append (NCSEXPER does this validation in `coapiSetFgNr`'s 18-char
+ *   branch — we accept without verifying for now).
+ * - **Anything else**: return unchanged so the caller can surface the
+ *   garbage rather than silently fabricating padding around it.
+ *
+ * The bare 7-char FGNR (what NCSEXPER stores as `FAHRGESTELL_NR_KOMPL`
+ * — "kompakt", not "komplett") is also available via the second return
+ * field for callers that want to display both side-by-side.
+ */
+export interface PaddedVin {
+  /** 17-char VIN-shaped string (real VIN when SG returned one; padded placeholder when SG returned bare FGNR). */
+  vin: string;
+  /** Bare 7-char FGNR — what NCSEXPER calls `FAHRGESTELL_NR_KOMPL`. */
+  fgnr: string;
+  /** True when `vin` is the placeholder-padded form (middle 10 chars synthetic). */
+  padded: boolean;
+}
+
+export function padFgnrToVin(raw: string): PaddedVin {
+  const s = String(raw ?? '').trim().toUpperCase();
+  if (s.length === 7) {
+    return {
+      vin: NCSEXPER_VIN_PLACEHOLDER + s,
+      fgnr: s,
+      padded: true,
+    };
+  }
+  if (s.length === 17) {
+    return { vin: s, fgnr: s.slice(10), padded: false };
+  }
+  if (s.length === 18) {
+    const trimmed = s.slice(0, 17);
+    return { vin: trimmed, fgnr: trimmed.slice(10), padded: false };
+  }
+  return { vin: s, fgnr: s.length >= 7 ? s.slice(-7) : s, padded: false };
+}
+
 export async function readVin(
   ediabas: EdiabasLike,
   sgbd: string,

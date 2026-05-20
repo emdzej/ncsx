@@ -1,5 +1,6 @@
 <script lang="ts">
   import { findSgsByFlag } from "@emdzej/ncsx-chassis";
+  import { padFgnrToVin } from "@emdzej/ncsx-identity";
   import type { SgfamRow } from "@emdzej/ncsx-text-tables";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
@@ -76,16 +77,18 @@
     try {
       await withRuntime(row, async (h) => {
         await h.runCabimain("FGNR_LESEN");
-        const vin = h.cabi.cabdPar("FAHRGESTELL_NR");
+        const rawFgnr = h.cabi.cabdPar("FAHRGESTELL_NR");
         const vinStatus = h.cabi.lastJobStatus;
 
         await h.runCabimain("FA_READ");
         const fa = h.cabi.cabdPar("FA_STREAM");
         const faStatus = h.cabi.lastJobStatus;
 
+        const vin =
+          typeof rawFgnr === "string" && rawFgnr ? padFgnrToVin(rawFgnr).vin : undefined;
         app.identity = {
           source: row,
-          vin: typeof vin === "string" ? vin : undefined,
+          vin,
           fa: typeof fa === "string" ? fa : undefined,
           vinStatus,
           faStatus,
@@ -113,7 +116,7 @@
     try {
       await withRuntime(row, async (h) => {
         await h.runCabimain("FGNR_LESEN");
-        const vin = h.cabi.cabdPar("FAHRGESTELL_NR");
+        const rawFgnr = h.cabi.cabdPar("FAHRGESTELL_NR");
         const vinStatus = h.cabi.lastJobStatus;
 
         await h.runCabimain("ZCS_LESEN");
@@ -121,6 +124,9 @@
         const sa = h.cabi.cabdPar("SA_SCHLUESSEL");
         const vn = h.cabi.cabdPar("VN_SCHLUESSEL");
         const zcsStatus = h.cabi.lastJobStatus;
+
+        const vin =
+          typeof rawFgnr === "string" && rawFgnr ? padFgnrToVin(rawFgnr).vin : undefined;
         const haveZcs =
           typeof gm === "string" &&
           typeof sa === "string" &&
