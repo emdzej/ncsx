@@ -263,6 +263,13 @@ export async function startNcsRuntime(
         `cabimain not found in ${cabdBasename}.ipo — IPO is not a CABI-style dispatcher`,
       );
     }
+    // NCSEXPER's C side publishes JOBNAME via the CABD-parameter store
+    // before invoking the IPO scheduler — cabimain's pc=6 reads it back
+    // via CDHGetCabdPar("JOBNAME"). Mirror that: set the param first so
+    // the IPO's dispatch finds the right case. Also push it as local[0]
+    // (defensive — matches the disassembly comment in docs/ipo-usage.md
+    // that says `local[0] := JOBNAME`).
+    await cabi.CDHSetCabdPar("JOBNAME", jobName);
     const ctx = vm.createExecutionContext();
     ctx.pushString(jobName);
     try {
