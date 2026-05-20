@@ -1,9 +1,9 @@
 <script lang="ts">
   import { findSgsByFlag } from "@emdzej/ncsx-chassis";
-  import { readFa, readVin, readZcs } from "@emdzej/ncsx-identity";
   import type { SgfamRow } from "@emdzej/ncsx-text-tables";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
+  import { startNcsRuntime, type RuntimeHandle } from "../lib/runtime.svelte";
 
   let reading = $state(false);
   /** SG the user is actively reading from — drives the per-row spinner. */
@@ -35,29 +35,62 @@
   const canConnect = $derived(connection.status.kind === "connected");
 
   /**
-   * Read VIN + FA against an FA-master SG. Both jobs run in parallel. Partial success
-   * (VIN OK, FA failed) is kept — the panel shows each field's status so the user sees
-   * what actually came back.
+   * Build a per-row CABI runtime. Mirrors NCSEXPER's "load A_<cabd>.ipo" step
+   * — the IPO carries the per-CABD job-name mapping (e.g. `FGNR_LESEN` →
+   * SGBD's `C_FG_LESEN`), so the right call to `apiJob` falls out of running
+   * `cabimain(JOBNAME)` against that specific dispatcher.
+   */
+  async function withRuntime<T>(
+    row: SgfamRow,
+    fn: (handle: RuntimeHandle) => Promise<T>,
+  ): Promise<T> {
+    if (!row.cabd) throw new Error(`SGFAM row for ${row.sgName} has no CABD`);
+    if (!row.sgbd) throw new Error(`SGFAM row for ${row.sgName} has no SGBD`);
+    const handle = await startNcsRuntime({
+      cabdBasename: row.cabd,
+      sgbd: row.sgbd,
+    });
+    try {
+      return await fn(handle);
+    } finally {
+      await handle.dispose();
+    }
+  }
+
+  /**
+   * Read VIN + FA via the IPO dispatcher. We invoke `cabimain("FGNR_LESEN")`
+   * then `cabimain("FA_READ")` against the row's `A_*.ipo` — both contract
+   * names verified against NCSEXPER (`FUN_00433a70("FGNR_LESEN", …)` /
+   * `FUN_00433a70("FA_READ", …)`). The IPO routes them to `FgnrLesen` /
+   * `AuftragLesen`, which call `apiJob` through our CDHapiJob override.
+   * Results land on `handle.cabi.lastJob`.
+   *
+   * Jobs are sequential — the IPO mutates VM state per call, and we own the
+   * VM for the duration of each `runCabimain`.
    */
   async function onReadFaFromSg(row: SgfamRow): Promise<void> {
-    if (!connection.session || reading || !row.sgbd) return;
+    if (!connection.session || reading || !row.sgbd || !row.cabd) return;
     reading = true;
     activeSgName = row.sgName;
     app.error = null;
     try {
-      const ediabas = connection.session.ediabas;
-      const [vin, fa] = await Promise.all([
-        readVin(ediabas, row.sgbd),
-        readFa(ediabas, row.sgbd),
-      ]);
-      app.identity = {
-        source: row,
-        vin: vin.ok ? vin.vin : undefined,
-        fa: fa.ok ? fa.fa : undefined,
-        vinStatus: vin.jobStatus,
-        faStatus: fa.jobStatus,
-        error: !vin.ok && !fa.ok ? (vin.error ?? fa.error) : undefined,
-      };
+      await withRuntime(row, async (h) => {
+        await h.runCabimain("FGNR_LESEN");
+        const vin = h.cabi.findResult("FAHRGESTELL_NR");
+        const vinStatus = h.cabi.lastJobStatus;
+
+        await h.runCabimain("FA_READ");
+        const fa = h.cabi.findResult("FA_STREAM");
+        const faStatus = h.cabi.lastJobStatus;
+
+        app.identity = {
+          source: row,
+          vin: typeof vin === "string" ? vin : undefined,
+          fa: typeof fa === "string" ? fa : undefined,
+          vinStatus,
+          faStatus,
+        };
+      });
     } catch (err) {
       app.error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -67,29 +100,42 @@
   }
 
   /**
-   * Read VIN + ZCS against a ZCS-master SG. Returns raw ZCS bytes + GM/VN sub-fields
-   * if the SG split them out. The SA bit-set inside `zcs.netto` is opaque until we
-   * wire the ZST decoder (separate package; see assumptions A6).
+   * Read VIN + ZCS via the IPO dispatcher. `cabimain("ZCS_LESEN")` routes to
+   * the IPO's `ZcsLesen` handler which calls `apiJob` for the SGBD's
+   * `ZCS_LESEN` and emits `GM_SCHLUESSEL` / `SA_SCHLUESSEL` / `VN_SCHLUESSEL`.
+   * The SA-bit decoding via `<BR>ZST.*` is a separate package (assumption A6).
    */
   async function onReadZcsFromSg(row: SgfamRow): Promise<void> {
-    if (!connection.session || reading || !row.sgbd) return;
+    if (!connection.session || reading || !row.sgbd || !row.cabd) return;
     reading = true;
     activeSgName = row.sgName;
     app.error = null;
     try {
-      const ediabas = connection.session.ediabas;
-      const [vin, zcs] = await Promise.all([
-        readVin(ediabas, row.sgbd),
-        readZcs(ediabas, row.sgbd),
-      ]);
-      app.identity = {
-        source: row,
-        vin: vin.ok ? vin.vin : undefined,
-        zcs: zcs.ok ? zcs.zcs : undefined,
-        vinStatus: vin.jobStatus,
-        zcsStatus: zcs.jobStatus,
-        error: !vin.ok && !zcs.ok ? (vin.error ?? zcs.error) : undefined,
-      };
+      await withRuntime(row, async (h) => {
+        await h.runCabimain("FGNR_LESEN");
+        const vin = h.cabi.findResult("FAHRGESTELL_NR");
+        const vinStatus = h.cabi.lastJobStatus;
+
+        await h.runCabimain("ZCS_LESEN");
+        const gm = h.cabi.findResult("GM_SCHLUESSEL");
+        const sa = h.cabi.findResult("SA_SCHLUESSEL");
+        const vn = h.cabi.findResult("VN_SCHLUESSEL");
+        const zcsStatus = h.cabi.lastJobStatus;
+        const haveZcs =
+          typeof gm === "string" &&
+          typeof sa === "string" &&
+          typeof vn === "string";
+
+        app.identity = {
+          source: row,
+          vin: typeof vin === "string" ? vin : undefined,
+          zcs: haveZcs
+            ? { gm: gm as string, sa: sa as string, vn: vn as string }
+            : undefined,
+          vinStatus,
+          zcsStatus,
+        };
+      });
     } catch (err) {
       app.error = err instanceof Error ? err.message : String(err);
     } finally {

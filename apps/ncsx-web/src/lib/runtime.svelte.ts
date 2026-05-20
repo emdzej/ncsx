@@ -30,7 +30,7 @@
 
 import { parseIpo } from "@emdzej/inpax-parser";
 import { VM, MainScheduler, ExecutionContext } from "@emdzej/inpax-interpreter";
-import { SystemFunction } from "@emdzej/inpax-core";
+import { SystemFunction, type FunctionBlock } from "@emdzej/inpax-core";
 import { WebUIProvider } from "@emdzej/inpax-web-provider";
 import { CabiProvider } from "@emdzej/ncsx-inpax-cabi-provider";
 
@@ -74,6 +74,18 @@ export interface RuntimeHandle {
   cabi: CabiProvider;
   /** EDIABAS bridge — exposes `lastResults` after a job runs. */
   ediabas: EdiabasXProvider;
+  /**
+   * Run the IPO's `cabimain(JOBNAME)` dispatcher with the supplied job name.
+   * Awaits `__inpa_startup__` first so globals / constants are populated,
+   * then invokes `cabimain` with `jobName` bound to its `local[0]`. The
+   * matching `A_*.ipo` switch dispatches to `Cod` / `Lesen` / `FgnrLesen` /
+   * `ZcsLesen` / `Ident` etc., which call `apiJob` via the CABI provider.
+   *
+   * Result data lives on `cabi.findResult(name)` afterwards (e.g.
+   * `"FAHRGESTELL_NR"`, `"FA_STREAM"`, `"GM_SCHLUESSEL"`). `cabi.lastJobStatus`
+   * carries the EDIABAS `JOB_STATUS`.
+   */
+  runCabimain: (jobName: string) => Promise<void>;
   /** Stop the scheduler + tear down. Idempotent. */
   dispose: () => Promise<void>;
 }
@@ -99,14 +111,33 @@ async function loadIpoBytes(basename: string): Promise<Uint8Array> {
   );
 }
 
+export interface StartNcsRuntimeOptions {
+  /**
+   * CABD module name from SGFAM.CABD / SGAUSWAHL — already includes the
+   * `A_` prefix (e.g. `A_KMB46`). Used as the filename basename to look
+   * up the IPO from NCSEXPER/SGDAT.
+   */
+  cabdBasename: string;
+  /**
+   * EDIABAS SGBD basename (e.g. `C_KMB46`) — what the CDHapiJob override
+   * passes to `apiJob`. Comes from `SgfamRow.sgbd`. Decoupled from
+   * `app.selectedModule` so the identity-read flow (which runs before any
+   * module is selected) can drive the runtime directly off the SGFAM row.
+   */
+  sgbd: string;
+}
+
 /**
- * Build a per-CABD runtime. `cabdBasename` is the CABD module name from SGAUSWAHL.CABD
- * (e.g. `A_AKMB46`); we look up the matching `A_<cabd>.IPO` from NCSEXPER/SGDAT.
+ * Build a per-CABD runtime. Looks up `<cabdBasename>.IPO` from NCSEXPER/SGDAT
+ * and wires the inpax VM, providers, and CDH bridge for it.
  *
  * Requires an active `connection.session` — the runtime reuses that Ediabas
  * instance via `getTransport` so we don't double-open the serial port.
  */
-export async function startNcsRuntime(cabdBasename: string): Promise<RuntimeHandle> {
+export async function startNcsRuntime(
+  options: StartNcsRuntimeOptions,
+): Promise<RuntimeHandle> {
+  const { cabdBasename, sgbd } = options;
   if (!connection.session) {
     throw new Error("No active ECU connection — Connect to the ECU first");
   }
@@ -199,12 +230,9 @@ export async function startNcsRuntime(cabdBasename: string): Promise<RuntimeHand
     const jobLabel = ctx.popString();
     // jobLabel is the contract name (e.g. "FGNR_LESEN") — useful for logging
     // and the protocol report. sgbdJob is what we actually pass to apiJob.
-    // app.selectedModule.sgbd holds the resolved SGBD basename from SGAUSWAHL.
-    const sgbd = app.selectedModule?.sgbd ?? "";
-    if (!sgbd) {
-      console.warn(`[ncsx-runtime] CDHapiJob override fired but no SGBD selected — ${jobLabel} → ${sgbdJob}`);
-      return;
-    }
+    // sgbd is captured from the runtime config (per-CABD); the IdentityPanel
+    // and module flows pass their own row's SGBD in.
+    void jobLabel;
     // Combine params + paramsHex into the EDIABAS params arg. NCSEXPER
     // passes both as a single string concatenated; for now we use whichever
     // is non-empty (paramsHex wins when both are present, since paramsHex
@@ -233,14 +261,43 @@ export async function startNcsRuntime(cabdBasename: string): Promise<RuntimeHand
     screenExecutor: { tickInterval: 50 },
   });
 
-  // 6. Scheduler — runs __inpa_startup__ asynchronously. For NCS's A_*.ipo files
+  // 7. Scheduler — runs __inpa_startup__ asynchronously. For NCS's A_*.ipo files
   //    this populates the IPO's globals/constants; the actual job dispatch
-  //    happens later via `vm.executeBlock(cabimain)` with JOBNAME set.
+  //    happens later via `runCabimain(jobName)`.
   const scheduler = new MainScheduler(vm, { tickInterval: 50, debug: false });
   scheduler.start();
-  void vm.run().catch((err: unknown) => {
+  const startupPromise = vm.run().catch((err: unknown) => {
     console.error(`[ncsx-runtime/${cabdBasename}] VM startup error:`, err);
   });
+
+  // 8. cabimain runner. NCSEXPER's MFC UI calls into the IPO with the job
+  //    name as `local[0]` — see `docs/ipo-usage.md:22` ("local[0] := JOBNAME
+  //    (passed by NCSEXPER's MFC UI)"). We mimic the same by pushing the
+  //    string onto a fresh ExecutionContext before `executeBlockWithContext`
+  //    runs the block: with frameOffset = 0 on a fresh ctx, `local[0]` ==
+  //    `stack[0]`, so the IPO's `if JOBNAME == "FGNR_LESEN"` switch picks the
+  //    right handler.
+  //
+  //    Startup must complete first — `__inpa_startup__` writes constants /
+  //    globals that the cabimain switch reads from.
+  const runCabimain = async (jobName: string): Promise<void> => {
+    await startupPromise;
+    let cabimain: FunctionBlock | undefined;
+    for (const block of vm.getIpo().functions.values()) {
+      if (block.header.name === "cabimain") {
+        cabimain = block;
+        break;
+      }
+    }
+    if (!cabimain) {
+      throw new Error(
+        `cabimain not found in ${cabdBasename}.ipo — IPO is not a CABI-style dispatcher`,
+      );
+    }
+    const ctx = vm.createExecutionContext();
+    ctx.pushString(jobName);
+    await vm.executeBlockWithContext(cabimain, ctx);
+  };
 
   let disposed = false;
   return {
@@ -248,6 +305,7 @@ export async function startNcsRuntime(cabdBasename: string): Promise<RuntimeHand
     vm,
     cabi,
     ediabas: ediabasProvider,
+    runCabimain,
     dispose: async () => {
       if (disposed) return;
       disposed = true;

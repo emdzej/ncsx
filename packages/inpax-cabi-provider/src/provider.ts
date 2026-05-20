@@ -585,12 +585,23 @@ export class CabiProvider {
   // Helpers
   // ───────────────────────────────────────────────────────────────────────────
 
-  protected findResult(name: string): unknown {
+  /**
+   * Public accessor for any named result from the most recent `CDHapiJob` call.
+   * Walks every result set in emission order and returns the first match. Used
+   * by host orchestrator code to read e.g. `FAHRGESTELL_NR` after running the
+   * IPO without going through another `CDHapiResultText` syscall.
+   */
+  findResult(name: string): unknown {
     for (const set of this.lastJob.sets) {
       const v = set.get(name);
       if (v !== undefined) return v;
     }
     return undefined;
+  }
+
+  /** Last seen `JOB_STATUS` from the most recent `CDHapiJob`. `'OKAY'` on success. */
+  get lastJobStatus(): string {
+    return this.lastJob.jobStatus;
   }
 
   protected findResultInSet(name: string, setIndex: number): unknown {
