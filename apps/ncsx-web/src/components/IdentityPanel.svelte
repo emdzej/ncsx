@@ -76,11 +76,11 @@
     try {
       await withRuntime(row, async (h) => {
         await h.runCabimain("FGNR_LESEN");
-        const vin = h.cabi.findResult("FAHRGESTELL_NR");
+        const vin = h.cabi.cabdPar("FAHRGESTELL_NR");
         const vinStatus = h.cabi.lastJobStatus;
 
         await h.runCabimain("FA_READ");
-        const fa = h.cabi.findResult("FA_STREAM");
+        const fa = h.cabi.cabdPar("FA_STREAM");
         const faStatus = h.cabi.lastJobStatus;
 
         app.identity = {
@@ -113,13 +113,13 @@
     try {
       await withRuntime(row, async (h) => {
         await h.runCabimain("FGNR_LESEN");
-        const vin = h.cabi.findResult("FAHRGESTELL_NR");
+        const vin = h.cabi.cabdPar("FAHRGESTELL_NR");
         const vinStatus = h.cabi.lastJobStatus;
 
         await h.runCabimain("ZCS_LESEN");
-        const gm = h.cabi.findResult("GM_SCHLUESSEL");
-        const sa = h.cabi.findResult("SA_SCHLUESSEL");
-        const vn = h.cabi.findResult("VN_SCHLUESSEL");
+        const gm = h.cabi.cabdPar("GM_SCHLUESSEL");
+        const sa = h.cabi.cabdPar("SA_SCHLUESSEL");
+        const vn = h.cabi.cabdPar("VN_SCHLUESSEL");
         const zcsStatus = h.cabi.lastJobStatus;
         const haveZcs =
           typeof gm === "string" &&

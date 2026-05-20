@@ -292,14 +292,46 @@ function makeOverride(
         writeOut(ctx, args.expiredflag, "bool", true);
       };
 
+    case "CDHSetCabdPar": {
+      // out: int RetVal — IPO writes the SGBD-result-to-NCS-contract-name
+      // mapping here. The host reads via `cabi.cabdPar(name)` after
+      // runCabimain returns.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHSetCabdPar(String(args.Bezeichner), String(args.Wert));
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHGetCabdPar": {
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetCabdPar(String(args.Bezeichner));
+        writeOut(ctx, args.Wert, "string", res.out?.wert ?? "");
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHSetCabdWordPar": {
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHSetCabdWordPar(String(args.Bezeichner), Number(args.Wert) | 0);
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHGetCabdWordPar": {
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetCabdWordPar(String(args.Bezeichner));
+        writeOut(ctx, args.Wert, "int", res.out?.wert ?? 0);
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+
     case "CDHSetReturnVal":
     case "CDHResetError":
     case "CDHResetApiJobData":
     case "CDHSetCbdName":
     case "CDHSetSgName":
-    case "CDHSetCabdPar":
     case "CDHSetSystemData":
-    case "CDHSetCabdWordPar":
     case "CDHSetError":
     case "CDHActivateFsw":
     case "CDHInactivateFsw":
@@ -320,9 +352,7 @@ function makeOverride(
     case "CDHCheckIdent2":
     case "CDHCheckDataUsed":
     case "CDHGetInfo":
-    case "CDHGetCabdPar":
     case "CDHGetSystemData":
-    case "CDHGetCabdWordPar":
     case "CDHGetSgbdName":
     case "CDHReadSget":
     case "CDHGetBaureiheFromZcs":

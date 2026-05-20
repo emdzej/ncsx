@@ -55,6 +55,15 @@ export class CabiProvider {
   protected lastJob: LastJobState = { sets: [], jobStatus: '' };
   /** Whether the host already called `CDHapiInit`. Mirrors NCSEXPER's COAPI gate. */
   protected initialised = false;
+  /**
+   * Key-value store the IPO uses to thread results between handlers.
+   * NCSEXPER's CDH layer keeps an equivalent CABD-parameter store —
+   * the IPO's `CDHSetCabdPar(name, value, retval)` writes into it,
+   * `CDHGetCabdPar(name, out, retval)` reads from it. Host code then
+   * pulls the final results (FAHRGESTELL_NR, FA_STREAM, etc.) by
+   * name via `cabdPar(name)` after `runCabimain` returns.
+   */
+  protected cabdPars: Map<string, string | number> = new Map();
 
   constructor(ctx: CdhContext) {
     this.ctx = ctx;
@@ -375,20 +384,39 @@ export class CabiProvider {
     throw new CdhNotImplementedError('CDHGetSystemData');
   }
 
-  async CDHSetCabdPar(_bezeichner: string, _wert: string): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHSetCabdPar');
+  async CDHSetCabdPar(bezeichner: string, wert: string): Promise<CdhResult> {
+    this.cabdPars.set(bezeichner, wert);
+    return { retVal: COAPI_OK };
   }
 
-  async CDHGetCabdPar(_bezeichner: string): Promise<CdhResult<{ wert: string }>> {
-    throw new CdhNotImplementedError('CDHGetCabdPar');
+  async CDHGetCabdPar(bezeichner: string): Promise<CdhResult<{ wert: string }>> {
+    const v = this.cabdPars.get(bezeichner);
+    return { retVal: COAPI_OK, out: { wert: typeof v === 'string' ? v : String(v ?? '') } };
   }
 
-  async CDHSetCabdWordPar(_bezeichner: string, _wert: number): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHSetCabdWordPar');
+  async CDHSetCabdWordPar(bezeichner: string, wert: number): Promise<CdhResult> {
+    this.cabdPars.set(bezeichner, wert | 0);
+    return { retVal: COAPI_OK };
   }
 
-  async CDHGetCabdWordPar(_bezeichner: string): Promise<CdhResult<{ wert: number }>> {
-    throw new CdhNotImplementedError('CDHGetCabdWordPar');
+  async CDHGetCabdWordPar(bezeichner: string): Promise<CdhResult<{ wert: number }>> {
+    const v = this.cabdPars.get(bezeichner);
+    return { retVal: COAPI_OK, out: { wert: typeof v === 'number' ? v : Number(v) | 0 } };
+  }
+
+  /**
+   * Public accessor for the IPO-managed CABD parameter store. After
+   * `runCabimain` returns, host code reads result values by their
+   * NCS-contract name (e.g. `"FAHRGESTELL_NR"`, `"FA_STREAM"`) — the IPO
+   * sets these via `CDHSetCabdPar` along its execution.
+   */
+  cabdPar(name: string): string | number | undefined {
+    return this.cabdPars.get(name);
+  }
+
+  /** Clear the CABD-parameter store between unrelated reads. */
+  resetCabdPars(): void {
+    this.cabdPars.clear();
   }
 
   async CDHSetCbdName(_cbdName: string): Promise<CdhResult> {
