@@ -29,20 +29,10 @@
  */
 
 import { parseIpo } from "@emdzej/inpax-parser";
-import { VM, MainScheduler, ExecutionContext } from "@emdzej/inpax-interpreter";
-import { SystemFunction, type FunctionBlock } from "@emdzej/inpax-core";
+import { VM, MainScheduler } from "@emdzej/inpax-interpreter";
+import { type FunctionBlock } from "@emdzej/inpax-core";
 import { CabiProvider } from "@emdzej/ncsx-inpax-cabi-provider";
-
-/**
- * Inpax 0.6.0 defines this type in `interpreter.ts` but doesn't re-export it
- * from the vm/index barrel — packaging gap. Re-declare locally; the shape
- * mirrors the interpreter's `SystemFunctionOverride` definition exactly so
- * if/when inpax exports it we can drop this and `import type`-it instead.
- */
-type SystemFunctionOverride = (
-  ctx: ExecutionContext,
-  vm: VM,
-) => void | Promise<void>;
+import { buildCabiSystemFunctions } from "./cabi-syscall-overrides";
 import {
   NullUIProvider,
   NullSimulationProvider,
@@ -198,77 +188,28 @@ export async function startNcsRuntime(
     currentCodierBaureihe: app.chassis?.code ?? null,
   });
 
-  // 6. System-function overrides. The IPO bytecode calls `CALL sys 0x0D` with
-  //    four string args (jobLabel, sgbdJob, params, paramsHex) — the IPO
-  //    bytecode treats this as the apiJob bridge regardless of the
-  //    compile-time keyword inpax names it. We bind it to our CDHapiJob
-  //    handler which delegates to the live Ediabas instance.
+  // 6. NCSEXPER CABI syscall overrides. The 99-entry slot table comes
+  //    from `ncsserv.exe`'s keyword block (cross-validated 68/68 against
+  //    the 334k empirical CALL sys observations from the 915 CABI IPOs
+  //    in NCSEXPER/SGDAT — see `docs/ncsexper-syscall-table.md`).
   //
-  //    Stack order: LIFO. The IPO pushes (jobLabel, sgbdJob, params,
-  //    paramsHex) top-down, so we pop them in reverse: paramsHex first,
-  //    then params, then sgbdJob, then jobLabel.
+  //    Each slot gets a `SystemFunctionOverride` that:
+  //    1. Pops args per the CABI.H signature (in reverse declaration
+  //       order — IPO pushes top-down, override pops LIFO).
+  //    2. Dispatches into `CabiProvider` for the load-bearing slots
+  //       (CDHapiJob at 0x0D, CDHapiResultText at 0x0F, etc.) so EDIABAS
+  //       calls actually fire and result data lands on `cabi.lastJob`.
+  //    3. Writes outs back through ref-params for utility funcs the IPO
+  //       depends on (strlen, strcat, midstr, ...) — without this the
+  //       IPO's control flow reads stale ALLOC defaults.
+  //    4. Pops + no-ops the rest (observability slots like PEM*,
+  //       CDHSetCabdPar, FSW/PSW toggles — useful in NCSEXPER's full
+  //       coding flow but not for our read-only path).
   //
-  //    The result lands on cabi.lastJob — subsequent CDHapiResult* calls
-  //    (also overridable here if the IPO uses them) read from that state.
-  //    For the current flow (FgnrLesen) the IPO doesn't actually call
-  //    CDHapiResultText; NCSEXPER's COAPI C code reads the result via
-  //    `apiResultText("FAHRGESTELL_NR", ...)` directly after the IPO returns
-  //    (we mirror that by reading EdiabasXProvider's lastResults from the
-  //    orchestrator).
-  const apiJobOverride: SystemFunctionOverride = async (ctx) => {
-    const paramsHex = ctx.popString();
-    const params = ctx.popString();
-    const sgbdJob = ctx.popString();
-    const jobLabel = ctx.popString();
-    // jobLabel is the contract name (e.g. "FGNR_LESEN") — useful for logging
-    // and the protocol report. sgbdJob is what we actually pass to apiJob.
-    // sgbd is captured from the runtime config (per-CABD); the IdentityPanel
-    // and module flows pass their own row's SGBD in.
-    void jobLabel;
-    // Combine params + paramsHex into the EDIABAS params arg. NCSEXPER
-    // passes both as a single string concatenated; for now we use whichever
-    // is non-empty (paramsHex wins when both are present, since paramsHex
-    // is the more specific binary form).
-    const paramsArg = paramsHex || params;
-    await cabi.CDHapiJob(sgbd, sgbdJob, paramsArg, "");
-  };
-
-  // 6a. Catch-all no-op for every CABI-runtime slot used by A_*.ipo files.
-  //
-  //     NCSEXPER's `CALL sys N` dispatch table is entirely different from
-  //     INPA's — same opcode (0x0C), same bytecode format, but a different
-  //     numeric-ID → function mapping baked into NCSEXPER.EXE's `.data`.
-  //     We inferred from disassembling all 194 A_*.ipo files that the CABI
-  //     runtime uses 55 distinct slot IDs in the range 0x00..0x60. Inpax's
-  //     hardcoded SystemFunctionMap targets INPA's table — using it
-  //     unmodified produces "Stack underflow" / "Expected reference for
-  //     out parameter" on virtually every call (PEMInitialisiere expects
-  //     4 args but NCSEXPER's same-numbered slot takes 1, etc.).
-  //
-  //     Workaround until we dump NCSEXPER's actual `.data` table via
-  //     ghidra: register a no-op for every slot the IPOs touch. `opCall`
-  //     calls `popFrame()` after the override returns, which truncates the
-  //     value stack back to the FRAME marker — args (and any out-refs)
-  //     get cleaned up automatically. Slots with observability semantics
-  //     (PEM*, OutputDebug*, setjobstatus) suffer no real loss; slots
-  //     with out-param semantics leave the caller's destination at its
-  //     pre-call value (typically the ALLOC default — 0 / "" / false),
-  //     which is "no error" by convention. The IPO falls through error
-  //     branches.
-  //
-  //     The load-bearing slot is 0x0D (apiJob bridge — confirmed via
-  //     ghidra + the FRAME→4-string-arg pattern in every FgnrLesen /
-  //     Cod / Lesen / ZcsLesen handler). That one gets a real handler
-  //     above (`apiJobOverride`) that routes into our CabiProvider.
-  //     Results land on `cabi.lastJob` and the orchestrator reads them
-  //     via `handle.cabi.findResult(...)` after `runCabimain` returns —
-  //     we don't depend on the IPO's apiResultText calls writing back.
-  const noOp: SystemFunctionOverride = () => {
-    /* CABI runtime slot — popFrame after this cleans args + out-refs */
-  };
-  const systemFunctions = new Map<number, SystemFunctionOverride>();
-  for (let id = 0x00; id <= 0x60; id++) systemFunctions.set(id, noOp);
-  systemFunctions.set(SystemFunction.exitwindows, apiJobOverride);
+  //    See `cabi-syscall-overrides.ts` for the per-slot implementations.
+  const systemFunctions = buildCabiSystemFunctions(cabi, {
+    defaultSgbd: sgbd,
+  });
 
   const vm = new VM(ipo, {
     runtime: {
