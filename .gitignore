@@ -4,3 +4,6 @@ dist
 *.tsbuildinfo
 .DS_Store
 coverage
+
+# Local agent (Claude Code) project state — not for the repo.
+.claude/
