@@ -4,6 +4,7 @@
   import type { CabdModule } from "@emdzej/ncsx-chassis";
   import { app } from "../lib/state.svelte";
   import IdentityPanel from "./IdentityPanel.svelte";
+  import EcuList from "./EcuList.svelte";
 
   let filter = $state("");
   let modules = $state<CabdModule[]>([]);
@@ -150,9 +151,16 @@
     )} `.C??` files on disk).
   </p>
 
-  <div class="mb-4">
+  <div class="mb-4 space-y-3">
     <IdentityPanel />
+    <EcuList />
   </div>
+
+  <details class="mb-4">
+    <summary class="cursor-pointer text-xs text-faint hover:text-muted">
+      Browse all coding variants manually …
+    </summary>
+  </details>
 
   <input
     type="search"
