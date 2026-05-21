@@ -122,10 +122,10 @@
         </span>
         <span class="text-xs text-faint">
           Point us at the folder that contains
-          <code class="text-muted">NCSEXPER/</code>,
-          <code class="text-muted">EDIABAS/</code>, and
-          <code class="text-muted">EC-APPS/</code>. We'll auto-discover DATEN,
-          PFL, SGBD files, INPA scripts. NCSX remembers it for next time.
+          <code class="text-muted">NCSEXPER/</code> and
+          <code class="text-muted">EDIABAS/</code>. We'll auto-discover DATEN,
+          PFL, A_*.ipo dispatchers, and SGBD files. NCSX remembers it for
+          next time.
         </span>
       </button>
       <p class="text-center text-xs text-faint">

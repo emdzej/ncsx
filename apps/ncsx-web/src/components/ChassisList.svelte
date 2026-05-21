@@ -12,10 +12,9 @@
     return [
       { label: "DATEN", present: i.daten !== null, role: "coding catalogs" },
       { label: "PFL", present: i.pfl !== null, role: "profiles" },
-      { label: "NCS SGDAT", present: i.ncsSgdat !== null, role: "BEST scripts" },
+      { label: "NCS SGDAT", present: i.ncsSgdat !== null, role: "A_*.ipo dispatchers + BEST scripts" },
       { label: "NCS CFGDAT", present: i.ncsCfgdat !== null, role: "COAPI config" },
       { label: "EDIABAS/Ecu", present: i.ediabasEcu !== null, role: "SGBD files (wire)" },
-      { label: "INPA SGDAT", present: i.inpaSgdat !== null, role: "IPO scripts" },
     ];
   });
 

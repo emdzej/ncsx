@@ -9,6 +9,7 @@
   import ErrorBanner from "./components/ErrorBanner.svelte";
   import ConnectButton from "./components/ConnectButton.svelte";
   import SettingsDialog from "./components/SettingsDialog.svelte";
+  import IdentityPanel from "./components/IdentityPanel.svelte";
 
   // Load the community-maintained translation dictionary on app boot. Vite serves
   // `/translations.csv` from `apps/ncsx-web/public/`. The CSV is ~1 MB but parses in
@@ -70,6 +71,17 @@
   {/if}
 
   <main class="flex-1 overflow-y-auto">
+    {#if app.chassis && (app.view === "browse-modules" || app.view === "view-module")}
+      <!--
+        Identity (VIN / FA / ZCS) stays visible once a chassis is loaded, across both
+        the module-list and the per-module FunctionTree views — same source-ECU readback
+        regardless of which screen the user is on. Constrained to the same `max-w` as
+        the views below so the layout reads as a stacked column rather than a banner.
+      -->
+      <div class="mx-auto max-w-5xl p-6 pb-0">
+        <IdentityPanel />
+      </div>
+    {/if}
     {#if app.view === "picker"}
       <InstallPicker />
     {:else if app.view === "browse-chassis"}

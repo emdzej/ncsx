@@ -1,14 +1,88 @@
 <script lang="ts">
   import { findSgsByFlag } from "@emdzej/ncsx-chassis";
   import { padFgnrToVin } from "@emdzej/ncsx-identity";
+  import { tokenizeFa, faToAsw } from "@emdzej/ncsx-fa-asw";
+  import { selectEcus } from "@emdzej/ncsx-ecu-select";
   import type { SgfamRow } from "@emdzej/ncsx-text-tables";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
   import { startNcsRuntime, type RuntimeHandle } from "../lib/runtime.svelte";
+  import { describeFaKeywordWithFallback } from "../lib/fa-describe";
 
   let reading = $state(false);
   /** SG the user is actively reading from — drives the per-row spinner. */
   let activeSgName = $state<string | null>(null);
+  /** Toggle for the "Details" panel that breaks the FA into tokens. */
+  let showDetails = $state(false);
+
+  /**
+   * Decoded FA: tokens with the FSW keywords each activates and the
+   * community-translation lookup for those keywords. Empty when no
+   * FA has been read or the chassis lacks an AT table. Pipeline:
+   *
+   *   1. `tokenizeFa(fa)` splits on FA delimiters → raw tokens.
+   *   2. For each token, look up `chassis.at` to get the AT record's
+   *      `fsws` list (the FSW keywords this code enables).
+   *   3. For each FSW keyword, fall back through `chassis.swtAsw`
+   *      (KEYID resolution — proves the AT record actually maps) and
+   *      `app.translations` (English description).
+   */
+  const decodedFa = $derived.by<
+    Array<{
+      token: string;
+      knownInAt: boolean;
+      tokenDescription: string | null;
+      atComment: string;
+      fsws: Array<{ keyword: string; description: string | null }>;
+    }>
+  >(() => {
+    if (!app.chassis || !app.identity?.fa) return [];
+    const tokens = tokenizeFa(app.identity.fa);
+    const tr = app.translations?.entries;
+    return tokens.map((token) => {
+      const rec =
+        app.chassis!.at?.get(token) ??
+        app.chassis!.at?.get(token.replace(/^0+/, ""));
+      const tokenDescription = describeFaKeywordWithFallback(token, tr);
+      if (!rec) {
+        return {
+          token,
+          knownInAt: false,
+          tokenDescription,
+          atComment: "",
+          fsws: [],
+        };
+      }
+      const fsws = rec.fsws.map((fsw) => ({
+        keyword: fsw,
+        description: describeFaKeywordWithFallback(fsw, tr),
+      }));
+      return {
+        token,
+        knownInAt: true,
+        tokenDescription,
+        atComment: rec.comment ?? "",
+        fsws,
+      };
+    });
+  });
+
+  /** Cached SG-install summary for the Details panel footer. */
+  const installSummary = $derived.by<{ total: number; installed: number } | null>(
+    () => {
+      if (!app.chassis || !app.identity?.fa) return null;
+      try {
+        const asw = faToAsw(app.identity.fa, { chassis: app.chassis });
+        const installed = selectEcus(app.chassis, asw);
+        return {
+          total: app.chassis.sgfam.size,
+          installed: installed.length,
+        };
+      } catch {
+        return null;
+      }
+    },
+  );
 
   /**
    * FA-master SGs (SGFAM `FA=1`) — modern chassis. On E46 that's typically AKMB + ALSZ;
@@ -160,12 +234,22 @@
   <div class="mb-2 flex items-baseline justify-between gap-2">
     <h3 class="text-sm font-semibold text-foreground">Vehicle identity</h3>
     {#if app.identity}
-      <button
-        class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
-        onclick={clearIdentity}
-      >
-        clear
-      </button>
+      <div class="flex items-center gap-3">
+        {#if app.identity.fa}
+          <button
+            class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
+            onclick={() => (showDetails = !showDetails)}
+          >
+            {showDetails ? "hide details" : "details"}
+          </button>
+        {/if}
+        <button
+          class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
+          onclick={clearIdentity}
+        >
+          clear
+        </button>
+      </div>
     {/if}
   </div>
 
@@ -175,9 +259,24 @@
       <div class="flex gap-2">
         <span class="w-12 font-mono text-faint">VIN</span>
         <span class="font-mono text-foreground">
-          {id.vin ?? "—"}
-          {#if !id.vin && id.vinStatus}
-            <span class="text-faint">({id.vinStatus})</span>
+          {#if id.vin}
+            {@const vin = id.vin}
+            {@const prefix = vin.length > 7 ? vin.slice(0, -7) : ""}
+            {@const tail = vin.length > 7 ? vin.slice(-7) : vin}
+            <!--
+              The last 7 chars are the production-sequential portion of
+              the VIN — the "real" identifier that NCS tools display
+              prominently. Bolding it makes it easy to read past the
+              WBAAA00000 placeholder padFgnrToVin prepends to the 7-char
+              FGNR returned by the ECU.
+            -->
+            {#if prefix}<span class="text-faint">{prefix}</span>{/if}<span
+              class="font-bold">{tail}</span>
+          {:else}
+            —
+            {#if id.vinStatus}
+              <span class="text-faint">({id.vinStatus})</span>
+            {/if}
           {/if}
         </span>
       </div>
@@ -219,6 +318,74 @@
         read from <span class="font-mono">{id.source.sgName}</span> ({id.source.sgbd})
       </p>
     </div>
+
+    {#if showDetails && id.fa}
+      <!--
+        Decoded FA panel — shows each token in the FA string with the
+        FSWs that token activates per the chassis `<BR>AT.000` table
+        and any community-provided English description. Resolution
+        chain documented on `decodedFa`'s `$derived` above.
+      -->
+      <div class="mt-3 rounded border border-divider bg-base p-2 text-xs">
+        <div class="mb-2 flex items-baseline justify-between gap-2 text-faint">
+          <span class="font-semibold uppercase tracking-wider">
+            Decoded FA · {decodedFa.length} token{decodedFa.length === 1 ? "" : "s"}
+          </span>
+          {#if installSummary}
+            <span>
+              {installSummary.installed} / {installSummary.total} SGs installed
+            </span>
+          {/if}
+        </div>
+        {#if decodedFa.length === 0}
+          <p class="text-faint italic">
+            Couldn't tokenize the FA string. The raw string is shown above.
+          </p>
+        {:else}
+          <ul class="space-y-1.5">
+            {#each decodedFa as t (t.token)}
+              <li class="border-b border-divider/40 pb-1 last:border-b-0 last:pb-0">
+                <div class="flex items-baseline gap-2">
+                  <span class="font-mono text-foreground">{t.token}</span>
+                  {#if t.tokenDescription}
+                    <span class="text-muted">— {t.tokenDescription}</span>
+                  {/if}
+                  {#if !t.knownInAt}
+                    <span class="text-faint italic">
+                      (not in <span class="font-mono">{app.chassis?.code}AT.000</span>)
+                    </span>
+                  {:else if t.fsws.length === 0}
+                    <span class="text-faint italic">— no FSWs mapped</span>
+                  {/if}
+                </div>
+                {#if t.atComment}
+                  <!--
+                    Trailing comment on the AT record (e.g. `//Stand
+                    PU03_06`). Often gives the production-schedule
+                    context BMW added the entry for.
+                  -->
+                  <p class="ml-3 mt-0.5 text-faint italic">
+                    {t.atComment}
+                  </p>
+                {/if}
+                {#if t.fsws.length > 0}
+                  <ul class="ml-3 mt-0.5 space-y-0.5">
+                    {#each t.fsws as f (f.keyword)}
+                      <li class="flex items-baseline gap-2 text-faint">
+                        <span class="font-mono text-muted">{f.keyword}</span>
+                        {#if f.description}
+                          <span>— {f.description}</span>
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
   {:else}
     {#if !canConnect}
       <p class="text-xs text-faint">Connect to the ECU to read FA / ZCS / VIN.</p>

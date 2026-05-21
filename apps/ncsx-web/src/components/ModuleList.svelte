@@ -3,7 +3,6 @@
   import { buildFunctionList } from "@emdzej/ncsx-function-list";
   import type { CabdModule } from "@emdzej/ncsx-chassis";
   import { app } from "../lib/state.svelte";
-  import IdentityPanel from "./IdentityPanel.svelte";
   import EcuList from "./EcuList.svelte";
 
   let filter = $state("");
@@ -111,6 +110,7 @@
         codingIndex: ci,
         sgbd: sgbdByPhysicalAndCi.get(`${moduleName}.${ciLabel}`) ?? null,
         umrsg: umrsgs ? [...umrsgs][0] ?? null : null,
+        resolution: { kind: "manual" },
       };
       app.lastReadNetto = null;
       app.view = "view-module";
@@ -152,7 +152,6 @@
   </p>
 
   <div class="mb-4 space-y-3">
-    <IdentityPanel />
     <EcuList />
   </div>
 

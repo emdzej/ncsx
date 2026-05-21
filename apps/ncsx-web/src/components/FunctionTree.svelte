@@ -11,13 +11,35 @@
     decodeCurrentPsw,
   } from "@emdzej/ncsx-function-list";
   import type { CodingPlan } from "@emdzej/ncsx-coder";
-  import { applyCodingPlan, readCoding } from "@emdzej/ncsx-wire";
+  import { applyCodingPlan } from "@emdzej/ncsx-wire";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
+  import { processReadCoding } from "../lib/process-ecu";
+  import { downloadFswPsw } from "../lib/fsw-psw-trc";
 
   let filter = $state("");
   let reading = $state(false);
   let applying = $state(false);
+  /**
+   * Transient post-read confirmation. Set after a successful Read /
+   * Apply-then-readback so the user gets explicit feedback that the
+   * job completed (the FunctionList re-renders quietly otherwise).
+   * Auto-clears after a few seconds so the banner doesn't linger
+   * past its relevance.
+   */
+  let readStatus = $state<{ kind: "read" | "apply"; summary: string } | null>(
+    null,
+  );
+  let readStatusTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function flashReadStatus(kind: "read" | "apply", summary: string): void {
+    readStatus = { kind, summary };
+    if (readStatusTimer) clearTimeout(readStatusTimer);
+    readStatusTimer = setTimeout(() => {
+      readStatus = null;
+      readStatusTimer = null;
+    }, 6000);
+  }
 
   /**
    * Pending PSW changes keyed by FSW id. Empty after every Read/Apply — we only keep
@@ -183,18 +205,63 @@
       pendingEdits.length > 0,
   );
 
+  /**
+   * Read CODIERDATEN through the per-CABD IPO's `Lesen` dispatcher
+   * (matching NCSEXPER), not a direct `apiJob(sgbd, "CODIERDATEN_LESEN")`.
+   * The IPO drives the full IDENT → C_S_LESEN → CODIER_DATEN flow and
+   * honours any per-CABD nuances (auth gates, CI lookups). We need
+   * both the SGFAM row (for the `A_*.ipo` basename) and the resolved
+   * SGBD (CI-specific via SGAUSWAHL) — `selectedModule.umrsg` keys the
+   * SGFAM row and `selectedModule.sgbd` is the right SGBD for this CI.
+   */
   async function onReadFromEcu(): Promise<void> {
-    if (!connection.session || !app.selectedModule?.sgbd) return;
+    if (
+      !connection.session ||
+      !app.selectedModule?.sgbd ||
+      !app.chassis ||
+      !app.functionList
+    )
+      return;
+    const umrsg = app.selectedModule.umrsg;
+    const row = umrsg ? app.chassis.sgfam.get(umrsg) : undefined;
+    if (!row) {
+      app.error = `No SGFAM row for ${umrsg ?? "selected SG"} — can't dispatch via the per-CABD IPO`;
+      return;
+    }
     reading = true;
     app.error = null;
     try {
-      const result = await readCoding(connection.session.ediabas, app.selectedModule.sgbd);
+      const result = await processReadCoding(
+        row,
+        app.selectedModule.sgbd,
+        app.functionList,
+      );
       if (!result.ok) {
-        app.error = `Read failed: ${result.error ?? result.jobStatus}`;
+        app.error = `Read failed: ${result.error ?? result.jobStatus ?? "(no status)"}`;
         return;
       }
       app.lastReadNetto = result.netto ?? null;
-      targets = {}; // discard any pending edits — the new netto might already have them
+      targets = {};
+      // Count active FSWs in the freshly-read netto so the user sees
+      // not just "bytes read" but how many real coding decisions are
+      // visible. `decodeCurrentPsw` returns null for FSWs the netto
+      // doesn't match (rare, but counted separately so a malformed
+      // read is obvious).
+      let active = 0;
+      let unmatched = 0;
+      if (result.netto) {
+        for (const it of items) {
+          if (it.kind !== "function") continue;
+          if (decodeCurrentPsw(it, result.netto) === null) unmatched++;
+          else active++;
+        }
+      }
+      const sgbd = app.selectedModule.sgbd;
+      const len = result.netto?.length ?? 0;
+      flashReadStatus(
+        "read",
+        `Read complete — ${len} bytes from ${sgbd} · ${active} FSW${active === 1 ? "" : "s"} decoded${unmatched > 0 ? `, ${unmatched} unmatched` : ""}`,
+      );
     } catch (err) {
       app.error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -243,11 +310,28 @@
         return;
       }
       targets = {};
-      const refresh = await readCoding(
-        connection.session.ediabas,
-        app.selectedModule.sgbd,
+      // Post-write re-read goes back through the IPO (same path as
+      // onReadFromEcu) so the user sees whatever the SGBD reports
+      // *after* a SG_CODIEREN — including any auto-checksum updates.
+      let refreshLen: number | undefined;
+      if (app.chassis && app.functionList && app.selectedModule.umrsg) {
+        const refRow = app.chassis.sgfam.get(app.selectedModule.umrsg);
+        if (refRow) {
+          const refresh = await processReadCoding(
+            refRow,
+            app.selectedModule.sgbd,
+            app.functionList,
+          );
+          if (refresh.ok) {
+            app.lastReadNetto = refresh.netto ?? null;
+            refreshLen = refresh.netto?.length;
+          }
+        }
+      }
+      flashReadStatus(
+        "apply",
+        `Apply complete — wrote ${pendingEdits.length} edit${pendingEdits.length === 1 ? "" : "s"} to ${app.selectedModule.sgbd}${refreshLen !== undefined ? ` · re-read ${refreshLen} bytes` : ""}`,
       );
-      if (refresh.ok) app.lastReadNetto = refresh.netto ?? null;
     } catch (err) {
       app.error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -276,6 +360,37 @@
         {stats.unoccupied} unoccupied ·
         {stats.groups} groups
       </p>
+      {#if app.selectedModule?.resolution.kind === "auto"}
+        {@const r = app.selectedModule.resolution}
+        <!--
+          Explain why THIS .Cxx was picked. The user dispatched
+          `CODIERINDEX_LESEN` against `r.sourceSg`; the IPO returned
+          the raw hex `r.codingIndexHex`; we mapped that to the .Cxx
+          via SGAUSWAHL. Status is the EDIABAS JOB_STATUS so users
+          can spot a degraded read (`OKAY` vs `ERROR_*`).
+        -->
+        <p class="mt-1 text-xs text-faint">
+          Auto-selected via
+          <span class="font-mono text-muted">CODIERINDEX_LESEN</span>
+          on
+          <span class="font-mono text-muted">{r.sourceSg}</span>
+          → CODIERINDEX =
+          <span class="font-mono text-muted">0x{r.codingIndexHex}</span>
+          · status
+          <span
+            class="font-mono {r.jobStatus === 'OKAY'
+              ? 'text-green-600 dark:text-green-400'
+              : 'text-muted'}"
+          >
+            {r.jobStatus || "(unknown)"}
+          </span>
+        </p>
+      {:else if app.selectedModule?.resolution.kind === "manual"}
+        <p class="mt-1 text-xs text-faint">
+          Manually selected — no <span class="font-mono text-muted">CODIERINDEX_LESEN</span>
+          run.
+        </p>
+      {/if}
     </div>
     <div class="flex items-center gap-3">
       <button
@@ -291,6 +406,31 @@
         {reading ? "Reading…" : "Read from ECU"}
       </button>
       <button
+        class="rounded border border-divider bg-surface px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+        onclick={() => {
+          if (app.functionList && app.lastReadNetto)
+            downloadFswPsw("trc", app.functionList, app.lastReadNetto);
+        }}
+        disabled={!app.functionList || !app.lastReadNetto}
+        title={app.lastReadNetto
+          ? "Download FSW_PSW.TRC — full snapshot of currently-active FSW/PSW pairs (same format NCSEXPER's coapiTraceFswPsw writes to WORK/)"
+          : "Read from the ECU first — TRC mirrors the post-read FSW/PSW state"}
+      >
+        Export FSW_PSW.TRC
+      </button>
+      <button
+        class="rounded border border-divider bg-surface px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+        onclick={() => {
+          if (app.functionList) downloadFswPsw("man", app.functionList, targets);
+        }}
+        disabled={!app.functionList || pendingEdits.length === 0}
+        title={pendingEdits.length > 0
+          ? "Download FSW_PSW.MAN — staged edits only, in NCSdummy's manipulation format. Drop into NCSEXPER's WORK/ and set [FSWPSW].FswPswLeseDatei=FSW_PSW.MAN to have NCSEXPER apply these before SG_CODIEREN."
+          : "Stage at least one PSW edit first"}
+      >
+        Export FSW_PSW.MAN
+      </button>
+      <button
         class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
         onclick={back}
       >
@@ -298,6 +438,28 @@
       </button>
     </div>
   </div>
+
+  {#if readStatus}
+    <div
+      class="mb-4 flex items-baseline justify-between gap-2 rounded border border-green-500/50 bg-green-500/10 px-3 py-2 text-xs text-foreground"
+      role="status"
+    >
+      <span>
+        <span class="font-semibold">
+          {readStatus.kind === "read" ? "✓ Read complete" : "✓ Apply complete"}
+        </span>
+        <span class="ml-2 text-faint">
+          {readStatus.summary.replace(/^Read complete — |^Apply complete — /, "")}
+        </span>
+      </span>
+      <button
+        class="text-faint underline-offset-2 hover:text-muted hover:underline"
+        onclick={() => (readStatus = null)}
+      >
+        dismiss
+      </button>
+    </div>
+  {/if}
 
   <input
     type="search"

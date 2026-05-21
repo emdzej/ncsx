@@ -6,6 +6,11 @@
     saveConfig,
     type InterfaceType,
   } from "../lib/config";
+  import {
+    clearInstallHandle,
+    saveInstallHandle,
+  } from "../lib/install-storage";
+  import { discoverNcsxInstall } from "../lib/daten-install";
   import { app } from "../lib/state.svelte";
 
   /**
@@ -54,6 +59,44 @@
     app.config = { ...app.config, gateway: { ...(app.config.gateway ?? {}), url } };
   }
 
+  /**
+   * Reset everything that depends on the picked install — chassis,
+   * selected module, function list, last-read netto, identity. We
+   * clear them all in one place so "Forget" / "Change folder" land
+   * the app in a clean state regardless of where the user was.
+   */
+  function clearDerivedInstallState(): void {
+    app.chassis = null;
+    app.identity = null;
+    app.selectedSg = null;
+    app.selectedModule = null;
+    app.functionList = null;
+    app.lastReadNetto = null;
+  }
+
+  async function forgetInstall(): Promise<void> {
+    await clearInstallHandle();
+    app.install = null;
+    clearDerivedInstallState();
+    app.view = "picker";
+    app.showSettings = false;
+  }
+
+  async function changeInstall(): Promise<void> {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: "read" });
+      const install = await discoverNcsxInstall(handle);
+      app.install = install;
+      clearDerivedInstallState();
+      await saveInstallHandle(handle);
+      app.view = "browse-chassis";
+      app.showSettings = false;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      app.error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
   const webSerialAvailable = $derived(isWebSerialSupported());
   const secure = $derived(isSecureContext());
 </script>
@@ -86,6 +129,45 @@
       </header>
 
       <section class="space-y-4 px-4 py-4 text-sm text-foreground">
+        <!-- Install root —
+             surfaces the picked BMW Standard Tools folder + lets the user
+             swap it (e.g. moved the install) or forget the saved handle
+             entirely (handy when the saved folder is gone). -->
+        <div>
+          <span class="mb-1 block text-xs font-semibold uppercase tracking-wider text-faint">
+            Install
+          </span>
+          <div class="flex items-center justify-between gap-2 rounded border border-divider bg-base px-3 py-2">
+            <span class="truncate text-sm">
+              {#if app.install}
+                <span class="font-mono text-foreground">{app.install.root.name}</span>
+                <span class="ml-2 text-xs text-faint">
+                  · {app.install.chassisCodes.length} chassis declared
+                </span>
+              {:else}
+                <span class="italic text-faint">(no install picked)</span>
+              {/if}
+            </span>
+            <div class="flex shrink-0 items-center gap-3">
+              <button
+                class="rounded border border-rule px-2 py-0.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
+                onclick={changeInstall}
+                title="Pick a different install folder (will replace the saved one)"
+              >
+                Change folder…
+              </button>
+              <button
+                class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                onclick={forgetInstall}
+                disabled={!app.install}
+                title="Drop the remembered install handle and return to the picker"
+              >
+                Forget
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- Interface -->
         <div>
           <label for="iface" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-faint">Interface</label>

@@ -49,6 +49,25 @@ export type AppView =
   | "view-module";
 
 /**
+ * How `SelectedModule.codingIndex` was determined. `auto` carries the
+ * EDIABAS `JOB_STATUS` and raw hex from the live `CODIERINDEX_LESEN`
+ * run so the UI can explain *why* a particular `.Cxx` was picked.
+ * `manual` is when the user clicked a CI in the "Browse all coding
+ * variants manually" list.
+ */
+export type ModuleResolution =
+  | {
+      kind: "auto";
+      /** SGFAM row name we dispatched against (e.g. `KMB`). */
+      sourceSg: string;
+      /** Raw hex string the IPO published as `CODIERINDEX` (e.g. `08`). */
+      codingIndexHex: string;
+      /** Last EDIABAS `JOB_STATUS` from the IPO run (e.g. `OKAY`). */
+      jobStatus: string;
+    }
+  | { kind: "manual" };
+
+/**
  * Per-module ECU coordinates. Populated when the user picks a `.Cxx` from `ModuleList`,
  * so the `FunctionTree` knows which SGBD to talk to when reading from the bus and which
  * UMRSG to surface as the logical SG label.
@@ -62,6 +81,8 @@ export interface SelectedModule {
   sgbd: string | null;
   /** Logical SG (e.g. `KMB`); null if no matching SGAUSWAHL row was found. */
   umrsg: string | null;
+  /** How we landed on this CI — auto-resolved from the ECU vs user-picked. */
+  resolution: ModuleResolution;
 }
 
 interface AppState {

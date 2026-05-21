@@ -3,18 +3,20 @@ import type { ChassisSource } from "@emdzej/ncsx-chassis";
 import { fileSystemAccessChassisSource } from "./fs-chassis-source";
 
 /**
- * The four subsystems a real BMW Standard Tools install ships:
+ * The two subsystems ncsx actually uses out of a BMW Standard Tools install:
  *
  *   <root>/
  *     NCSEXPER/          coding ─── DATEN, PFL, SGDAT, CFGDAT, WORK
  *     EDIABAS/           wire   ─── Bin (EDIABAS.INI), Ecu (.prg/.grp SGBDs)
- *     EC-APPS/INPA/      diag   ─── SGDAT (.ipo), CFGDAT (INPA.INI)
- *     EC-APPS/NFS/       optional NFS variant
+ *
+ * EC-APPS/INPA/ also exists in real installs (INPA diagnostic IPOs) but ncsx
+ * doesn't consume it — our IPO flow runs `A_*.ipo` dispatchers from
+ * `NCSEXPER/SGDAT/`, not INPA's diag scripts. Kept out of the discovery so the
+ * UI doesn't suggest we'd use it.
  *
  * The user picks the install root and we drill case-insensitively for each
  * canonical subdirectory. Missing subdirectories are surfaced to the UI rather
- * than treated as hard failures — coding works with just NCSEXPER; wire access
- * needs EDIABAS too; Kernfunktionen scripts need INPA.
+ * than treated as hard failures.
  */
 export interface NcsxInstall {
   /** The directory the user picked via showDirectoryPicker. */
@@ -37,12 +39,6 @@ export interface NcsxInstall {
   ediabasEcu: FileSystemDirectoryHandle | null;
   /** `<root>/EDIABAS/Bin` — EDIABAS.INI + interface DLLs (not needed in browser). */
   ediabasBin: FileSystemDirectoryHandle | null;
-
-  // ── INPA subsystem (diagnostics / Kernfunktionen) ─────────────────────────
-  /** `<root>/EC-APPS/INPA/SGDAT` — INPA's IPO scripts. */
-  inpaSgdat: FileSystemDirectoryHandle | null;
-  /** `<root>/EC-APPS/INPA/CFGDAT` — INPA.INI etc. */
-  inpaCfgdat: FileSystemDirectoryHandle | null;
 
   // ── Derived: chassis catalogue (from BR_REF.DAT under daten) ──────────────
   /** Chassis codes listed in BR_REF.DAT, e.g. ["E36", "E46", "E60", …]. */
@@ -90,8 +86,6 @@ export async function discoverNcsxInstall(
     ncsWork,
     ediabasEcu,
     ediabasBin,
-    inpaSgdat,
-    inpaCfgdat,
   ] = await Promise.all([
     drill(root, ["NCSEXPER", "DATEN"]),
     drill(root, ["NCSEXPER", "SGDAT"]),
@@ -100,8 +94,6 @@ export async function discoverNcsxInstall(
     drill(root, ["NCSEXPER", "WORK"]),
     drill(root, ["EDIABAS", "Ecu"]),
     drill(root, ["EDIABAS", "Bin"]),
-    drill(root, ["EC-APPS", "INPA", "SGDAT"]),
-    drill(root, ["EC-APPS", "INPA", "CFGDAT"]),
   ]);
 
   // Fallback: user picked NCSEXPER directly (no NCSEXPER subdir, but DATEN at root level).
@@ -145,8 +137,6 @@ export async function discoverNcsxInstall(
     ncsWork: resolvedNcsWork,
     ediabasEcu,
     ediabasBin,
-    inpaSgdat,
-    inpaCfgdat,
     chassisCodes,
     datenSource,
   };
