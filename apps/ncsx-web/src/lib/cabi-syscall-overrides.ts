@@ -149,6 +149,14 @@ function writeOut(
  */
 const SAFETY_CAP = 50_000;
 const YIELD_INTERVAL = 50;
+/**
+ * How often to dump a top-N histogram to the console. When an IPO
+ * spins silently (UI responsive but the read never finishes), the
+ * histogram tells us which slot is being hit on repeat without
+ * pegging the cap. Quiet runs print one summary; runaways print every
+ * HISTOGRAM_INTERVAL syscalls.
+ */
+const HISTOGRAM_INTERVAL = 1_000;
 
 export function buildCabiSystemFunctions(
   cabi: CabiProvider,
@@ -157,17 +165,25 @@ export function buildCabiSystemFunctions(
   const map = new Map<number, SystemFunctionOverride>();
   let count = 0;
   const slotHits = new Map<number, number>();
+  const slotNames = new Map<number, string>();
+  /**
+   * Trace the first N syscalls verbosely so we can see how the IPO
+   * starts up — useful when a flow hangs and the histogram alone
+   * doesn't show the *order*. Tail-end of an infinite loop, the
+   * histogram shows the spinner; the trace shows the lead-up.
+   */
+  const TRACE_FIRST = 30;
   for (const slot of NCSEXPER_CABI_SLOTS) {
+    slotNames.set(slot.id, slot.name);
     const raw = makeOverride(slot, cabi, opts);
     map.set(slot.id, async (ctx, vm) => {
       count++;
       slotHits.set(slot.id, (slotHits.get(slot.id) ?? 0) + 1);
+      if (count <= TRACE_FIRST) {
+        console.log(`[cabi-syscall #${count}] ${slot.name} (0x${slot.id.toString(16)})`);
+      }
       if (count > SAFETY_CAP) {
-        const top = [...slotHits.entries()]
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 5)
-          .map(([id, n]) => `0x${id.toString(16)}=${n}`)
-          .join(" ");
+        const top = topHits(slotHits, slotNames, 8);
         throw new Error(
           `[cabi-syscall] safety cap (${SAFETY_CAP}) hit — last slot 0x${slot.id.toString(16)} ${slot.name}. Top: ${top}`,
         );
@@ -175,10 +191,27 @@ export function buildCabiSystemFunctions(
       if (count % YIELD_INTERVAL === 0) {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
+      if (count % HISTOGRAM_INTERVAL === 0) {
+        console.warn(
+          `[cabi-syscall] ${count} calls so far — top: ${topHits(slotHits, slotNames, 8)}`,
+        );
+      }
       await raw(ctx, vm);
     });
   }
   return map;
+}
+
+function topHits(
+  hits: Map<number, number>,
+  names: Map<number, string>,
+  k: number,
+): string {
+  return [...hits.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, k)
+    .map(([id, n]) => `${names.get(id) ?? `0x${id.toString(16)}`}=${n}`)
+    .join(" ");
 }
 
 function makeOverride(
@@ -208,6 +241,56 @@ function makeOverride(
       return async () => { await cabi.CDHapiInit(); };
     case "CDHapiEnd":
       return async () => { await cabi.CDHapiEnd(); };
+
+    // CDHapiJobData(ecu, job, BufHandle, BufSize, result) — sister to
+    // CDHapiJob but the para slot is fed from a BinBuf. The Lesen
+    // dispatcher uses this to run `C_S_LESEN` after IDENT seeded the
+    // SGBD's state. We don't faithfully transport the BinBuf bytes —
+    // the SGBD reads its internal state and answers, the netto data
+    // comes back as a named result on `lastJob.sets`.
+    case "CDHapiJobData":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const ecu = String(args.ecu || opts.defaultSgbd);
+        const job = String(args.job);
+        try {
+          await cabi.CDHapiJobData(ecu, job, Number(args.BufHandle) | 0, Number(args.BufSize) | 0, String(args.result));
+        } catch (err) {
+          console.error(`[apiJobData] ${ecu}/${job} failed:`, err);
+          throw err;
+        }
+      };
+
+    // CDHGetApiJobData(MaxData, BufHandle, out BufSize, out NrOfData,
+    // out DataType, out RetVal) — IPO's Lesen handler polls this in a
+    // loop after IDENT until NrOfData reads 0, then proceeds to
+    // CDHapiJobData. Provider returns 1-then-0 across the pair, so the
+    // loop exits on the second call.
+    case "CDHGetApiJobData":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetApiJobData(Number(args.MaxData) | 0, Number(args.BufHandle) | 0);
+        writeOut(ctx, args.BufSize, "int", res.out?.bufSize ?? 0);
+        writeOut(ctx, args.NrOfData, "int", res.out?.nrOfData ?? 0);
+        writeOut(ctx, args.DataType, "int", res.out?.dataType ?? 0);
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+
+    // CDHapiResultBinary(BufHandle, ApiResult, ApiSet, out RetVal) —
+    // confirms the named binary result exists on the most recent
+    // apiJob's result set. We don't move bytes through a BinBuf — the
+    // host orchestrator pulls them via `cabi.findResult(name)` after
+    // runCabimain returns.
+    case "CDHapiResultBinary":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHapiResultBinary(
+          Number(args.BufHandle) | 0,
+          String(args.ApiResult),
+          Number(args.ApiSet) | 0,
+        );
+        writeOut(ctx, args.RetVal, "int", res.retVal === 0 ? 0 : 1);
+      };
 
     case "CDHapiResultText": {
       // out: string ResultText, in: string ApiResult, in: int ApiSet, in: string ApiFormat
@@ -287,6 +370,126 @@ function makeOverride(
         writeOut(ctx, args.ErrNr, "int", 0); // "no error" — IPO falls through happy path
       };
 
+    // ─── Slot table + BinBuf — load-bearing for Lesen / Cod ──────────
+    case "CDHSetDataOrg":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHSetDataOrg(
+          Number(args.WortBreite) | 0,
+          Number(args.ByteFolge) | 0,
+          Number(args.AdrMode) | 0,
+        );
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHGetNettoDataFromCbd":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetNettoDataFromCbd();
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHGetNettoMaskFromCbd":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetNettoMaskFromCbd();
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHCheckDataUsed":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHCheckDataUsed();
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHBinBufCreate":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHBinBufCreate();
+        writeOut(ctx, args.BufHandle, "int", res.out?.bufHandle ?? 0);
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHBinBufDelete":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHBinBufDelete(Number(args.BufHandle) | 0);
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHBinBufWriteByte":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHBinBufWriteByte(
+          Number(args.BufHandle) | 0,
+          Number(args.ByteVal) | 0,
+          Number(args.Position) | 0,
+        );
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHBinBufWriteWord":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHBinBufWriteWord(
+          Number(args.BufHandle) | 0,
+          Number(args.WordVal) | 0,
+          Number(args.Position) | 0,
+        );
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHBinBufReadByte":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHBinBufReadByte(
+          Number(args.BufHandle) | 0,
+          Number(args.Position) | 0,
+        );
+        writeOut(ctx, args.ByteVal, "int", res.out?.byteVal ?? 0);
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHBinBufReadWord":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHBinBufReadWord(
+          Number(args.BufHandle) | 0,
+          Number(args.Position) | 0,
+        );
+        writeOut(ctx, args.WordVal, "int", res.out?.wordVal ?? 0);
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHBinBufToStr":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHBinBufToStr(Number(args.BufHandle) | 0);
+        writeOut(ctx, args.BinBufStr, "string", res.out?.binBufStr ?? "");
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    case "CDHBinBufToNettoData":
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHBinBufToNettoData(Number(args.BufHandle) | 0);
+        writeOut(ctx, args.RetVal, "int", res.retVal);
+      };
+
+    // CABI slot 0x02 `exit()` — terminate the IPO. NCSEXPER's
+    // RET-equivalent at the script level (mirrors inpax's internal
+    // `exit` for INPA's slot 0x0C). Without this, the IPO's Lesen
+    // tail keeps re-running because our no-op doesn't stop the VM —
+    // strcat/CDHSetReturnVal/exit show up in a 1:1:1 spin in the
+    // histogram. Setting `state.running = false` makes the execute
+    // loop's `while (running && currentBlock)` bail on the next
+    // iteration.
+    case "exit":
+      return (_ctx, vm) => {
+        vm.stop();
+      };
+
     case "testtimer":
       // out: bool expiredflag — IPO uses settimer/testtimer pairs to
       // build busy-wait loops (`Warten`: while (!testtimer()) {}). If
@@ -352,12 +555,9 @@ function makeOverride(
     case "CDHGetFswDataFromCbd":
     case "CDHGetFswPswDataFromCbd":
     case "CDHGetGrpDataFromCbd":
-    case "CDHGetNettoDataFromCbd":
-    case "CDHGetNettoMaskFromCbd":
     case "CDHGetFswPswFromNettoData":
     case "CDHCheckIdent":
     case "CDHCheckIdent2":
-    case "CDHCheckDataUsed":
     case "CDHGetInfo":
     case "CDHGetSystemData":
     case "CDHGetSgbdName":
@@ -366,7 +566,6 @@ function makeOverride(
     case "CDHGetFswPswFromZcs":
     case "CDHGetFswPswFromCvt":
     case "CDHIdReady":
-    case "CDHSetDataOrg":
     case "CDHDelay":
     case "CDHCallAuthenticate":
     case "CDHAuthGetRandom":
@@ -374,21 +573,9 @@ function makeOverride(
     case "CDHGetAnzahlFaElemente":
     case "CDHGetFaElement":
     case "CDHapiResultSets":
-    case "CDHapiResultBinary":
-    case "CDHapiJobData":
     case "CDHapiCheckJobStatus":
-    case "CDHBinBufToNettoData":
-    case "CDHBinBufCreate":
-    case "CDHBinBufDelete":
-    case "CDHBinBufWriteByte":
-    case "CDHBinBufWriteWord":
-    case "CDHBinBufReadByte":
-    case "CDHBinBufReadWord":
-    case "CDHBinBufToStr":
-    case "CDHGetApiJobData":
     case "CDHGetApiJobByteData":
     case "settimer":
-    case "exit":
     case "hexconvert":
     case "simnum":
     case "simdigital":

@@ -27,7 +27,7 @@
  * internals.
  */
 
-import { buildFunctionList } from "@emdzej/ncsx-function-list";
+import { buildFunctionList, type FunctionList } from "@emdzej/ncsx-function-list";
 import type { Chassis } from "@emdzej/ncsx-chassis";
 import type { SgfamRow } from "@emdzej/ncsx-text-tables";
 import { app } from "./state.svelte";
@@ -152,6 +152,12 @@ export async function processEcu(
     codingIndex: ci,
     sgbd: physical.sgbd,
     umrsg: row.sgName,
+    resolution: {
+      kind: "auto",
+      sourceSg: row.sgName,
+      codingIndexHex,
+      jobStatus: jobStatus ?? "",
+    },
   };
   app.lastReadNetto = null;
   app.view = "view-module";
@@ -163,4 +169,114 @@ export async function processEcu(
     sgbd: physical.sgbd,
     jobStatus,
   };
+}
+
+export interface ReadCodingResult {
+  ok: boolean;
+  /** Netto-data bytes returned by the SGBD's `C_S_LESEN` job. */
+  netto?: Uint8Array;
+  /** Last EDIABAS JOB_STATUS surfaced by the IPO run, for diagnostics. */
+  jobStatus?: string;
+  /** Failure cause when `ok=false`. */
+  error?: string;
+}
+
+/**
+ * Run `CODIERDATEN_LESEN` against a live ECU through the per-CABD IPO
+ * dispatcher. Mirrors NCSEXPER's path: `cabimain` switches on the job
+ * name and dispatches to `Lesen`, which runs `IDENT` (apiJob) →
+ * `C_S_LESEN` (apiJobData) → reads back `CODIER_DATEN` as the netto
+ * bytes.
+ *
+ * Why through the IPO and not a direct `apiJob(sgbd, "CODIERDATEN_LESEN")`?
+ * The IPO carries per-CABD nuances (auth, multi-step state machines,
+ * coding-index gates) that the SGBD alone doesn't enforce. Going
+ * through the dispatcher means we behave like NCSEXPER on every CABD
+ * — including the chassis where the read path forks differently.
+ *
+ * The caller wires the SGFAM row (for the CABD/IPO basename) and the
+ * effective SGBD (potentially CI-specific via SGAUSWAHL, e.g.
+ * `KOMBI46R` for newer KMB CIs vs `C_KMB46` for older ones).
+ */
+export async function processReadCoding(
+  row: SgfamRow,
+  sgbd: string,
+  functionList: FunctionList,
+): Promise<ReadCodingResult> {
+  if (!row.cabd) {
+    return { ok: false, error: `SGFAM row for ${row.sgName} has no CABD — can't load A_*.ipo` };
+  }
+  if (!sgbd) {
+    return { ok: false, error: `No SGBD resolved for ${row.sgName}` };
+  }
+
+  // Flatten FunctionList items into the per-byte slot table NCSEXPER's
+  // C side would seed via repeated CDHSetNettoData(addr, 0) calls. The
+  // IPO's CDHGetApiJobData walks this table to build C_S_LESEN request
+  // packets. Each address gets one slot regardless of how many
+  // FunctionList items touch it.
+  const slots = flattenSlots(functionList);
+  if (slots.length === 0) {
+    return {
+      ok: false,
+      error: `FunctionList for ${row.sgName} has no coded addresses — nothing to read`,
+    };
+  }
+
+  const handle = await startNcsRuntime({
+    cabdBasename: row.cabd,
+    sgbd,
+  });
+  handle.cabi.setNettoSlots(slots);
+
+  let jobStatus: string | undefined;
+  let slotValues: Map<number, number> | undefined;
+  try {
+    await handle.runCabimain("CODIERDATEN_LESEN");
+    jobStatus = handle.cabi.lastJobStatus;
+    slotValues = handle.cabi.nettoSlotValues();
+  } finally {
+    await handle.dispose();
+  }
+
+  if (!slotValues || slotValues.size === 0) {
+    return {
+      ok: false,
+      jobStatus,
+      error: `IPO ran but no slot values were populated (status: ${jobStatus ?? "—"})`,
+    };
+  }
+
+  // Materialise the netto: pad to max(address) + 1 (or to the
+  // FunctionList's deliveryState length if larger so the resulting
+  // bytes line up with default-value comparisons). Holes (addresses
+  // no slot covered) stay at the deliveryState byte if available,
+  // otherwise 0.
+  const maxAddr = Math.max(...slotValues.keys());
+  const size = Math.max(maxAddr + 1, functionList.deliveryState.length);
+  const netto = new Uint8Array(size);
+  if (functionList.deliveryState.length > 0) {
+    netto.set(functionList.deliveryState.subarray(0, size));
+  }
+  for (const [addr, value] of slotValues) {
+    if (addr >= 0 && addr < netto.length) netto[addr] = value;
+  }
+
+  return { ok: true, netto, jobStatus };
+}
+
+/**
+ * Walk the FunctionList and emit one slot per coded byte address.
+ * Deduplicated — overlapping items share a single slot. Sorted by
+ * address so CDHGetApiJobData can find contiguous runs.
+ */
+function flattenSlots(list: FunctionList): Array<{ addr: number }> {
+  const addrs = new Set<number>();
+  for (const item of list.items) {
+    if (item.kind === "group") continue;
+    for (let off = 0; off < item.length; off++) {
+      addrs.add(item.address + off);
+    }
+  }
+  return [...addrs].sort((a, b) => a - b).map((addr) => ({ addr }));
 }
