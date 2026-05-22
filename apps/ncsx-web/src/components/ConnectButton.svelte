@@ -24,8 +24,7 @@
     onclick={onDisconnect}
   >
     <span aria-hidden="true">●</span>
-    Connected
-    <span class="text-faint">· {connection.status.portInfo}</span>
+    Disconnect
   </button>
 {:else if connection.status.kind === "connecting"}
   <span class="text-xs text-faint">Connecting…</span>
@@ -44,7 +43,7 @@
     onclick={onConnect}
     title="Connect to ECU via Web Serial"
   >
-    Connect to ECU
+    Connect
   </button>
 {:else}
   <span class="text-xs text-faint" title="Pick an install with an EDIABAS/Ecu folder to enable">

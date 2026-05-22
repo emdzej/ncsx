@@ -87,19 +87,6 @@
         </svg>
       </a>
       <span class="flex-1"></span>
-      {#if app.translations}
-        <span
-          class="text-xs text-faint"
-          title="Community-maintained keyword translations from NCSDummy"
-        >
-          {app.translations.entries.size.toLocaleString()} translations
-        </span>
-      {/if}
-      {#if app.install}
-        <span class="text-xs text-faint">
-          {app.install.root.name}
-        </span>
-      {/if}
       <button
         class="rounded border border-divider bg-surface px-2 py-0.5 text-xs text-muted transition hover:border-accent hover:bg-elevated"
         onclick={() => (app.showSettings = true)}

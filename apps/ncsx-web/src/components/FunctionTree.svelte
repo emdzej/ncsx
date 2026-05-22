@@ -293,17 +293,47 @@
   );
 
   /**
-   * "Apply defaults" is enabled whenever a module is loaded, the ECU is
-   * connected, and the CABD carries an `ANLIEFERZUSTAND` byte image. We
-   * deliberately do NOT require a prior read — the whole point of this
-   * button is to overwrite whatever's there with the factory image,
-   * regardless of what's currently coded.
+   * The CABD's `CODIERDATENBLOCK` span — total number of bytes the
+   * coding API is allowed to write. Computed from the group items the
+   * FunctionList carries. Used both for the Apply-defaults gate and
+   * the disabled-tooltip explanation.
+   */
+  const codingRegionBytes = $derived.by<number>(() => {
+    if (!app.functionList) return 0;
+    let n = 0;
+    for (const item of app.functionList.items) {
+      if (item.kind === "group" && item.groupKind === "coding") {
+        n += item.length;
+      }
+    }
+    return n;
+  });
+
+  /**
+   * "Apply defaults" requires the CABD's `ANLIEFERZUSTAND` block to
+   * cover the FULL `CODIERDATENBLOCK` region — otherwise we'd write
+   * zero bytes to addresses we have no factory default for, which
+   * the ECU rejects with ERROR_VERIFY (verified empirically on AKMB,
+   * whose CABD ships a 2-byte ANLIEFERZUSTAND against a 296-byte
+   * writable region).
+   *
+   * NCSEXPER itself doesn't implement a real factory-reset — its
+   * "SG_CODIEREN with empty FSW_PSW.MAN" path re-writes the current
+   * netto unchanged. The only CABDs where our feature has the right
+   * semantics are the ones that ship a complete default netto in
+   * `ANLIEFERZUSTAND` (KMB.C08 does; many others don't).
+   *
+   * Long-term we could derive per-FSW default PSWs from PARZUWEISUNG
+   * and synthesise the full default netto ourselves — but that's a
+   * separate piece of work. For now, this button is honest about
+   * when it can and can't run.
    */
   const canApplyDefaults = $derived(
     connection.status.kind === "connected" &&
       app.selectedModule?.sgbd != null &&
       app.functionList != null &&
-      app.functionList.deliveryState.length > 0,
+      app.functionList.deliveryState.length >= codingRegionBytes &&
+      codingRegionBytes > 0,
   );
 
   /**
@@ -823,7 +853,9 @@
           ? "Connect to ECU first"
           : !app.functionList
             ? "Load a module first"
-            : "This CABD has no ANLIEFERZUSTAND byte image"}
+            : codingRegionBytes === 0
+              ? "This CABD declares no CODIERDATENBLOCK — no writable bytes"
+              : `This CABD's ANLIEFERZUSTAND (${app.functionList?.deliveryState.length ?? 0} bytes) doesn't cover the full CODIERDATENBLOCK (${codingRegionBytes} bytes) — Apply Defaults can't run without a complete factory netto`}
     >
       {applying ? "Writing…" : "Apply defaults"}
     </button>

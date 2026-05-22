@@ -344,10 +344,22 @@ function flattenSlots(
   }
   const sorted = [...addrs].sort((a, b) => a - b);
   if (!netto) return sorted.map((addr) => ({ addr }));
-  return sorted.map((addr) => ({
-    addr,
-    value: addr < netto.length ? netto[addr] : 0,
-  }));
+  // Drop slots whose address falls outside the netto's extent. For
+  // Apply Defaults specifically (netto = CABD ANLIEFERZUSTAND, which
+  // can be shorter than the full CODIERDATENBLOCK range), zero-filling
+  // here would send "write zero to this ECU byte" telegrams for bytes
+  // the CABD has no factory default for — the ECU rejects with
+  // ERROR_VERIFY because the ECU's actual value doesn't match the
+  // bogus zero we're writing. Skipping the slot instead leaves the
+  // ECU's current byte untouched, matching NCSEXPER's "MAN file only
+  // mentions what it mentions" semantics.
+  //
+  // For normal writes (netto = lastReadNetto with user edits spliced
+  // in), netto covers the full coding region by construction so this
+  // filter is a no-op.
+  return sorted
+    .filter((addr) => addr < netto.length)
+    .map((addr) => ({ addr, value: netto[addr]! }));
 }
 
 export interface WriteCodingResult {
@@ -414,10 +426,48 @@ export async function processWriteCoding(
   // also returns bufSize=0 when slots are exhausted), keep the full
   // CODIERDATENBLOCK-wide seed.
   void lastReadNetto;
+  // Diagnostic: log slot-value distribution before dispatch. Lets us
+  // see whether the pendingNetto we were handed actually populates the
+  // CODIERDATENBLOCK addresses (or leaves them at zero because the
+  // netto is shorter than the slot range — the common shape-mismatch
+  // that surfaces as `ERROR_VERIFY` from C_S_AUFTRAG even though the
+  // SGBD/IPO transport is healthy).
+  //
+  // Also report the unfiltered coding-region span so we can tell apart
+  // "the CABD declares no CODIERDATENBLOCK groups" (codingRange empty)
+  // from "the pendingNetto is too short to cover the coding range"
+  // (codingRange present, slots dropped). The first means a CABD
+  // parser gap; the second means Apply Defaults can't run because
+  // ANLIEFERZUSTAND is smaller than the writable region.
+  const codingAddrs: number[] = [];
+  for (const item of functionList.items) {
+    if (item.kind !== "group" || item.groupKind !== "coding") continue;
+    for (let off = 0; off < item.length; off++) {
+      codingAddrs.push(item.address + off);
+    }
+  }
+  codingAddrs.sort((a, b) => a - b);
+  const codingRange =
+    codingAddrs.length > 0
+      ? `0x${codingAddrs[0]!.toString(16)}..0x${codingAddrs[codingAddrs.length - 1]!.toString(16)} (${codingAddrs.length} bytes)`
+      : "<empty>";
+  const nonZeroSlots = slots.filter((s) => (s.value ?? 0) !== 0).length;
+  const maxSlotAddr = slots.length > 0 ? slots[slots.length - 1]!.addr : 0;
+  console.log(
+    `[processWriteCoding] coding=${codingRange} · slots=${slots.length} (non-zero=${nonZeroSlots}, addr range 0x${slots[0]?.addr.toString(16) ?? "?"}..0x${maxSlotAddr.toString(16)}) · pendingNetto.length=${pendingNetto.length} · deliveryState.length=${functionList.deliveryState.length}`,
+  );
+
   if (slots.length === 0) {
+    // Differentiate the two failure modes so callers can react usefully.
+    if (codingAddrs.length === 0) {
+      return {
+        ok: false,
+        error: `${row.sgName}'s CABD declares no CODIERDATENBLOCK group — nothing the coding API is allowed to write`,
+      };
+    }
     return {
       ok: false,
-      error: `FunctionList for ${row.sgName} has no coded addresses — nothing to write`,
+      error: `${row.sgName}'s CODIERDATENBLOCK spans ${codingRange} but the source netto only covers ${pendingNetto.length} bytes — every coded byte falls outside the supplied defaults`,
     };
   }
 
