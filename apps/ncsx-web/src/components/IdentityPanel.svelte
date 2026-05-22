@@ -323,6 +323,24 @@
             {showDetails ? "hide details" : "details"}
           </button>
         {/if}
+        {#if app.identity.fa}
+          <button
+            class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
+            onclick={() => (app.showFaEditor = true)}
+            title="Edit FA — add or remove FA tokens, then write FA_WRITE to the ECU"
+          >
+            edit FA
+          </button>
+        {/if}
+        {#if app.identity.zcs}
+          <button
+            class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
+            onclick={() => (app.showZcsEditor = true)}
+            title="Edit ZCS — toggle SA bits / change GM/VN, then write ZCS_SCHREIBEN to the ECU"
+          >
+            edit ZCS
+          </button>
+        {/if}
         <button
           class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
           onclick={clearIdentity}

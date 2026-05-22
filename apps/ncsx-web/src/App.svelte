@@ -10,6 +10,8 @@
   import ConnectButton from "./components/ConnectButton.svelte";
   import SettingsDialog from "./components/SettingsDialog.svelte";
   import IdentityPanel from "./components/IdentityPanel.svelte";
+  import FaEditorDialog from "./components/FaEditorDialog.svelte";
+  import ZcsEditorDialog from "./components/ZcsEditorDialog.svelte";
 
   // Load the community-maintained translation dictionary on app boot. Vite serves
   // `/translations.csv` from `apps/ncsx-web/public/`. The CSV is ~1 MB but parses in
@@ -123,4 +125,6 @@
 
   <ErrorBanner />
   <SettingsDialog />
+  <FaEditorDialog />
+  <ZcsEditorDialog />
 </div>

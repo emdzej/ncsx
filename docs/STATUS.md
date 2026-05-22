@@ -1,207 +1,205 @@
 # ncsx — current state & resume-from-here
 
-Last updated: commit `ddd67b4` (Nov 2025).
+Last updated: 2026-05-22.
 
-> **Architectural assumptions** ncsx is currently built on: see [`assumptions.md`](assumptions.md).
+> **Architectural assumptions** ncsx is built on: [`assumptions.md`](assumptions.md).
 > Read that first if you're new — covers IPO scope, FA/ZCS handling, SGAUSWAHL resolution.
 >
 > **The full NCS Expert ↔ IPO ↔ CABI ↔ EDIABAS call architecture** (it's wild):
 > [`call-architecture.md`](call-architecture.md). Required reading before touching
-> packages/wire or packages/inpax-cabi-provider.
+> `packages/inpax-cabi-provider` or `apps/ncsx-web/src/lib/runtime.svelte.ts`.
 >
-> **NCSEXPER syscall table** (for upstream pluggable inpax SystemFunctionMap):
+> **NCSEXPER syscall table** (for upstream pluggable inpax `SystemFunctionMap`):
 > [`ncsexper-syscall-table.md`](ncsexper-syscall-table.md) — staged inventory +
 > ghidra verification recipe + the canonical machine-readable map at
 > `packages/inpax-cabi-provider/src/ncsexper-syscalls.ts`.
 
 ## TL;DR
 
-Reverse-engineering of BMW **NCSEXPER 4.0.1** is **functionally complete**.
-TypeScript re-implementation is **at the orchestrator stage**: 9 packages, 201 tests, all
-green. The only remaining "implementation" gap is wiring an actual EDIABAS stack underneath
-(via `@emdzej/ediabasx`) and a CLI/UI layer on top.
+`ncsx` is a working browser app. Read coding, edit FSW/PSW, write back over Web Serial or a
+remote gateway — end-to-end verified on E46 KMB (read+write), AKMB (read), GM5 (read+write).
+FA/ZCS edit dialogs are wired but not yet exercised on hardware.
+
+Live at **[ncsx.bimmerz.app](https://ncsx.bimmerz.app)**.
+
+## What works end-to-end on real hardware
+
+| Flow | Status |
+|---|---|
+| Pick BMW Standard Tools install, browse chassis catalog | ✔ |
+| Read VIN + FA / ZCS from the identity SG | ✔ |
+| FA-derived ECU filter (which SGs the car actually has) | ✔ |
+| Decode FA tokens (German + English via NCSDummy CSV) | ✔ |
+| Decode ZCS SA bit-set via `<BR>ZST.*` | ✔ |
+| Auto-pick `.Cxx` variant via `CODIERINDEX_LESEN` | ✔ |
+| Manual `.Cxx` browse | ✔ |
+| `CODIERDATEN_LESEN` through the per-CABD IPO | ✔ |
+| Edit PSWs in the UI, see byte-level diff | ✔ |
+| `SG_CODIEREN` through the per-CABD IPO | ✔ on KMB / GM5 |
+| Generic "Other jobs" runner via `JOB_ERMITTELN` | ✔ |
+| Apply Defaults via `SG_CODIEREN` with `ANLIEFERZUSTAND` | ✔ on CABDs with full default netto; gated otherwise |
+| Export `FSW_PSW.TRC` / `FSW_PSW.MAN` / `NETTODAT.TRC` | ✔ (NETTODAT.TRC format matches NCSEXPER `coapiTraceNettoData`) |
+| Import `FSW_PSW.MAN` to stage edits | ✔ |
+
+## What's wired but not hardware-verified
+
+| Flow | Status |
+|---|---|
+| **FA edit dialog → `FA_WRITE`** | code path complete (`FA_STREAM` cabd-par seeded in `runCabimain`); not yet tested on bench |
+| **ZCS edit dialog → `ZCS_SCHREIBEN`** | code path complete (`GM/SA/VN_SCHLUESSEL` cabd-pars seeded); not yet tested on bench |
+
+Both dialogs use optimistic host-state update + revert on failure. **Missing: verify
+readback after write** (`processWriteCoding` already does this for `SG_CODIEREN`; FA/ZCS
+dialogs trust `JOB_STATUS=OKAY`).
+
+## What's not done
+
+| Open item | Where |
+|---|---|
+| Verify readback after FA_WRITE / ZCS_SCHREIBEN | `apps/ncsx-web/src/components/{Fa,Zcs}EditorDialog.svelte` |
+| ZCS_LOESCHEN-before-SG_CODIEREN on ZCS-master chassis re-code | `apps/ncsx-web/src/lib/process-ecu.ts:processWriteCoding` |
+| Post-write `C_CHECKSUM` verify for `SG_CODIEREN` (`FUN_00406060`) | `process-ecu.ts:processWriteCoding` |
+| Per-FSW default-PSW derivation → real "Apply Defaults" for CABDs without `ANLIEFERZUSTAND` | `apps/ncsx-web` + maybe `packages/function-list` |
+| Authentication (`CDHCallAuthenticate` / `CDHAuthGetRandom`) | `packages/inpax-cabi-provider/src/provider.ts` — stubs; requires BMW seed/key tables we don't ship |
+| OPFS-backed cache for parsed CABD bundles | future Phase 5 (web app) |
+| `TraceOverlay` persistence | future Phase 5 (web app) |
+| Kernfunktionen runner (interactive IPOs — abs_uc.ipo etc.) | future; reuse `@emdzej/inpax`'s UI providers, see [`ipo-usage.md`](ipo-usage.md) |
+
+## Architecture
+
+Three layers, each its own repo:
+
+```
+ncsx       (this repo)   — NCS Expert: coding flow, FA, chassis catalog
+inpax                    — INPA: IPO bytecode interpreter, screen/menu UI
+ediabasx                 — EDIABAS: BEST/2 SGBD interpreter, wire transports
+```
+
+The web app routes every write through the per-CABD `A_*.ipo` — same path NCS Expert uses,
+so per-CABD auth gates, multi-step write protocols, and checksum recalculation are honoured.
+Direct `apiJob` calls would skip those and break on a non-trivial subset of CABDs.
+
+Per-dispatch seeding mirrors NCSEXPER's `FUN_00402c70`:
+
+| Job | Seeded cabd-pars | Source |
+|---|---|---|
+| any | `APPLIKATION` | `app.chassis.code` |
+| `FGNR_SCHREIBEN` | `FAHRGESTELL_NR` (with BMW Mod-36 check char) | `app.identity.vin` |
+| `ZCS_SCHREIBEN` | `GM_SCHLUESSEL`, `SA_SCHLUESSEL`, `VN_SCHLUESSEL` | `app.identity.zcs` |
+| `FA_WRITE` | `FA_STREAM` | `app.identity.fa` |
+
+For `SG_CODIEREN`, `FAHRGESTELL_NR` is seeded via `CDHSetSystemData` (different IPC channel —
+the IPO threads it into the post-write `C_FG_AUFTRAG` job's `para`).
+
+The cabd-par store is **per-dispatch** (cleared at the start of every job, matching NCSEXPER
+`FUN_0044b880`). Long-lived host state lives in `app.identity` / `app.chassis`.
 
 ## Packages
 
 ```
-ncsx/packages/                                                   tests
-├── daten/         binary frame parser                             33
-├── pfl/           PFL profile (uses inpax INI parser)             29
-├── text-tables/   ZST / AT / SGFAM / AT.M00 / AT.ZUS              18
-├── predicate/     AUFTRAGSAUSDRUCK byte-coded evaluator           21
-├── cabd/          netto-bytes ↔ FSW/PSW (encode + decode)         28
-├── chassis/       bundle loader + lazy CABD + SWT lookups         30
-├── fa-asw/        FA string → ASW bit set (via AT + SWTASW)       15
-├── ecu-select/    SGAUSWAHL_* walker (coapiScanAllSgFromBr)       11
-└── coder/         planCoding({chassis, fa, edits}) orchestrator   16
-                                                                 ────
-                                                                  201 ✔
+ncsx/
+├── apps/
+│   └── ncsx-web/                       browser SPA (Svelte 5 + Vite)
+└── packages/
+    ├── cabd/                           netto ↔ FSW/PSW encode/decode
+    ├── chassis/                        bundle loader + lazy CABD + SWT lookups
+    ├── coder/                          legacy planCoding() orchestrator
+    ├── daten/                          binary frame parser
+    ├── ecu-select/                     SGAUSWAHL_* walker + AUFTRAGSAUSDRUCK eval
+    ├── fa-asw/                         FA token string → ASW bit set
+    ├── function-list/                  build typed FunctionList from a CABD
+    ├── identity/                       read VIN/FA/ZCS + Mod-36 fgnr formatter
+    ├── inpax-cabi-provider/            CABI/CDH bridge for the inpax IPO interpreter
+    ├── options/                        NCSDummy-style coding-option overlay
+    ├── pfl/                            PFL profile INI parser
+    ├── predicate/                      byte-coded AUFTRAGSAUSDRUCK predicate compiler/runner
+    ├── property-formulas/              inverse formulas for property-style FSWs
+    ├── text-tables/                    ZST / AT / SGFAM / AT.M00 / AT.ZUS parsers
+    ├── trace/                          TraceOverlay — staged-edit tracker
+    ├── translations/                   NCSDummy CSV loader (community keyword → English)
+    └── wire/                           shared EdiabasLike type contracts
 ```
 
-`pnpm install && pnpm run ci` — 36/36 turbo tasks pass (build / lint / typecheck / test).
-
-## Architecture
-
-```
-                              ┌──────────────┐
-                              │   user FA    │
-                              └──────┬───────┘
-                                     │
-                              ┌──────▼───────────┐
-                              │  @emdzej/ncsx-   │
-                              │  fa-asw          │
-                              │                  │  AT record lookup
-                              │                  │  ↓ FSW names
-                              │                  │  SWTASW lookup
-                              │                  │  ↓ u16 KEYIDs
-                              └──────┬───────────┘
-                                     │ asw: Set<u16>
-                                     │
-              ┌──────────────────────▼─────────────────────────────┐
-              │  @emdzej/ncsx-ecu-select                            │
-              │    walk chassis.sget.SGAUSWAHL_VMSGBD               │
-              │       → SGAUSWAHL_SGBD → SGAUSWAHL_VM                │
-              │    eval AUFTRAGSAUSDRUCK via @emdzej/ncsx-predicate │
-              │    return SelectedSg[]                              │
-              └────────────────────────┬───────────────────────────┘
-                                       │
-                              ┌────────▼─────────┐
-                              │  @emdzej/ncsx-   │
-                              │  coder           │
-                              │    planCoding()  │
-                              │      for each SG │
-                              │      load CABD   │
-                              │      encode FSW  │
-                              │      → netto[]   │
-                              └────────┬─────────┘
-                                       │ CodingPlan[]
-                                       ▼
-                          (you-supply)  apiJob(sgbd, jobName, hex(netto), '')
-                                  →  @emdzej/ediabasx  →  ECU
-```
-
-## What's *not* yet built
-
-| Open item                                 | Status / where it'll go |
-|-------------------------------------------|--------------------------|
-| **FSW/PSW name → numeric id resolution**  | Edits to `coder` currently require numeric `fsw`/`psw`. `chassis.swtFsw` (FSW name → CABD KEYID) and `chassis.swtPsw` (PSW name → value) are **already loaded**; just need a thin helper. ~30 lines in `coder`. |
-| **CODIERDATEN_LESEN integration**         | `coder` accepts an `initialNetto` map. The "read from ECU" call is a one-liner against EDIABAS — wait for the wire layer. |
-| **EDIABAS wire transfer**                 | Use [`@emdzej/ediabasx`](../../ediabasx/) (already exists). One `apiJob` call per `CodingPlan`. |
-| **CLI** (`ncsx code …`)                   | Last mile. Thin wrapper over `coder` + ediabasx. |
-| **Kernfunktionen runner (IPO interpreter)** | Reuse [`@emdzej/inpax`](../../inpax/) verbatim. See [`ipo-usage.md`](ipo-usage.md). |
-| **VFP / ZUT verifier (`.ssd`)**           | Documented in [`ssd-zut-format.md`](ssd-zut-format.md). Not blocking coding. |
-
-## Docs
-
-Read order (under `docs/`):
-
-1. [`README.md`](README.md) — landing page
-2. [`NCSEXPER-REVERSE-ENG.md`](NCSEXPER-REVERSE-ENG.md) — architecture overview, EDIABAS job catalogue
-3. [`pfl-format.md`](pfl-format.md) — PFL INI schema
-4. [`daten-format.md`](daten-format.md) — binary frame format + text-table family
-5. [`ecu-selection.md`](ecu-selection.md) — FA + ZCS → SG list pipeline + AUFTRAGSAUSDRUCK grammar
-6. [`coding-flow.md`](coding-flow.md) — FSW/PSW ↔ netto-byte translation, both directions
-7. [`trc-man-files.md`](trc-man-files.md) — TRC/MAN observability files
-8. [`ssd-zut-format.md`](ssd-zut-format.md) — VERIFIKATION script format
-9. [`ipo-usage.md`](ipo-usage.md) — when NCS runs IPO files + syscall catalogue
-10. [`POC-DELTAS.md`](POC-DELTAS.md) — historical: gaps from the prior bimmerz POC
+`pnpm install && pnpm run ci` — build + lint + typecheck + test, all green.
 
 ## Reverse-engineering status
 
-All five "round-2/round-3" open items are now closed or deferred with workarounds:
+All major RE items closed. Remaining open items are small or deferrable:
 
 | Item | Status |
-|------|--------|
-| AUFTRAGSAUSDRUCK predicate grammar    | ✔ done — full decoder ([`predicate`](../packages/predicate/)) |
-| Lesemodus value ranges                | ✔ done — bounds from profile loader, in [`pfl-format.md`](pfl-format.md) |
-| ProfilPruefsumme behaviour            | ✔ confirmed opaque (not validated on load/save) |
-| CABD `A` (OPERATION) ops + EINHEIT    | ✔ full 9-operator + 5-unit set decoded ([`cabd`](../packages/cabd/)) |
-| DATEN-frame CRC formula               | ✔ XOR-fold, mathematically verified |
-| UMRSG column semantics                | ✔ Umrechnungs-SG, sprintf("V%s%s.%s", UMRSG, VMG, CABD) |
-| `.ssd` / ZUT record format            | ✔ record-tag-driven, handler family documented |
-| ZCSUT update flow (`coapiChangeZcsVm`)| ✔ entry surface mapped (3-tag output decoder) |
-| **FA → ASW / predicate-ID parity**    | ✔ via SWTASW: FA token → AT record → FSW names → KEYID → ASW bit (commit `0b28221`) |
-| IPO usage in NCS                      | ✔ documented in [`ipo-usage.md`](ipo-usage.md) |
-
-Remaining open RE items (small, deferrable):
-- `ProfilPruefsumme` editor write-path (only matters if we want to mint new profiles programmatically).
-- Lesemodus enum *value names* (numeric ranges known; symbolic mapping inside `coapiReadAsw/FswPsw/NettoData`).
-- ZCSUT inner functions `FUN_0043e4f0` / `FUN_0043cea0` for full ZCS-update walk.
-- `.ssd` `MASKE` / `UMRECHNUNG` value syntax (needs a real `.ssd` sample to confirm; likely matches CABD OPERATION).
+|---|---|
+| AUFTRAGSAUSDRUCK predicate grammar | ✔ full decoder (`packages/predicate`) |
+| CABD `A` (OPERATION) ops + EINHEIT | ✔ 9-operator + 5-unit set decoded |
+| DATEN-frame CRC formula | ✔ XOR-fold, verified |
+| UMRSG column semantics | ✔ Umrechnungs-SG, `sprintf("V%s%s.%s", UMRSG, VMG, CABD)` |
+| `.ssd` / ZUT record format | ✔ record-tag-driven, handler family documented |
+| ZCSUT update flow (`coapiChangeZcsVm`) | ✔ entry surface mapped |
+| FA → ASW / predicate-ID parity | ✔ via SWTASW |
+| IPO usage in NCS | ✔ [`ipo-usage.md`](ipo-usage.md) |
+| NCSEXPER `coapiSetCabdPar` per-dispatch model | ✔ verified via `FUN_00402c70` + `FUN_0044b880` |
+| BMW Mod-36 checksum for `FAHRGESTELL_NR` | ✔ ported from `coapiSetFgNr` |
+| NCSEXPER NETTODAT.TRC format | ✔ ported from `coapiTraceNettoData` (`FUN_004248f0`) |
+| NCSEXPER FA_WRITE / FA_READ flow | ✔ `coapiWriteAuftrag` (`FUN_0042f9c0`) + `coapiReadAuftrag` (`FUN_0042f800`) |
+| `ProfilPruefsumme` editor write-path | ☐ deferred (not on load/save round-trip) |
+| Lesemodus enum value names | ☐ deferred (ranges known; symbolic mapping unconfirmed) |
+| `.ssd` MASKE / UMRECHNUNG value syntax | ☐ deferred — needs a real `.ssd` sample |
+| ZCSUT inner walk (`FUN_0043e4f0` / `FUN_0043cea0`) | ☐ deferred |
+| `FUN_0042bad0` — NCSEXPER's SG_CODIEREN orchestrator | ☐ partially traced; checksum verify (`FUN_00406060`) untraced |
 
 ## Resume entry points
 
-When picking back up, in priority order:
+In priority order:
 
-### 1. FSW/PSW name → numeric resolution helper (smallest win)
+### 1. First-light test: FA and ZCS write
 
-`packages/coder/src/edit-resolver.ts`. About 30 lines:
+Read FA on the bench ECU → open "edit FA" → small no-op edit (add an existing token,
+confirm dedupe, then remove + re-add) → write → re-read FA → diff.
 
-```ts
-import type { Chassis } from '@emdzej/ncsx-chassis';
-import type { CodingEdit } from './types.js';
+Same for ZCS — read → no change → write SA back unchanged → re-read → byte-compare.
 
-export interface NamedEdit {
-  sgName?: string;
-  fsw: string;       // FSW name (e.g. "KEYCARDREADER")
-  psw: string | number;  // PSW name or raw value
-  index?: number;
-  blocknr?: number;
-}
+If either fails, the console traces (`[CDHapiJob]`, `[CDHSetCabdPar]`, `[CDHGetApiJobData]`,
+`[CDHapiResultText]`) show the full round-trip — diff against an NCSEXPER `ABLAUF.TRC` if
+needed.
 
-export function resolveNamedEdits(chassis: Chassis, edits: NamedEdit[]): CodingEdit[] {
-  // Use chassis.swtFsw.byKeyword to resolve `fsw` name → u16 CABD FSW id.
-  // Use chassis.swtPsw.byKeyword to resolve `psw` name → raw value (if string).
-  // Numeric PSW passes through.
-}
-```
+### 2. Verify readback after FA_WRITE / ZCS_SCHREIBEN
 
-### 2. EDIABAS wire layer
+In `FaEditorDialog.svelte` and `ZcsEditorDialog.svelte`, after `runCabimain` returns
+`JOB_STATUS=OKAY`, dispatch `FA_READ` / `ZCS_LESEN` against the same SG, drain the result,
+update `app.identity` with the readback value. ~20 lines per dialog. Same pattern
+`processWriteCoding` uses for `SG_CODIEREN`.
 
-`packages/wire/` — new package. Depends on `@emdzej/ediabasx`. One function:
+### 3. SG_CODIEREN post-write checksum verify
 
-```ts
-export async function applyCodingPlan(
-  apiJob: (sgbd: string, job: string, params: string, results: string) => Promise<JobResult>,
-  plan: CodingPlan,
-): Promise<{ status: 'OKAY' | 'ERROR'; details?: string }> {
-  // hex-encode plan.netto
-  // call apiJob(plan.sgbd, plan.jobName, hex, '')
-  // check JOB_STATUS via the result set
-}
-```
+NCSEXPER's `FUN_0042bad0` runs `C_CHECKSUM` after `SG_CODIEREN` (we already commented this
+in `process-ecu.ts:processWriteCoding`). Trace `FUN_00406060` and `FUN_0042bad0` to
+understand the checksum job's params, then wire it into `processWriteCoding`'s reread step.
 
-### 3. CLI
+### 4. ZCS_LOESCHEN-before-SG_CODIEREN on ZCS-master chassis
 
-`apps/cli/` — new app. `ncsx code --br E46 --fa "BL91" --edit "KMB.KEYCARDREADER=eingebaut"` …
-Wires everything: `loadChassis` → `planCoding` (with named edits) → either dump the
-hex-encoded netto (offline mode) or call into the wire layer.
+NCSEXPER's `FUN_004030e0` dispatches `ZCS_LOESCHEN` before `SG_CODIEREN` when the chassis
+flag at `local_188 + 0x2a8c` is set (ZCS-master path). Mirror this in `processWriteCoding`
+so re-coding a ZCS-master ECU under a different FA works.
 
-### 4. Kernfunktionen runner
+### 5. Per-FSW default-PSW derivation for "Apply Defaults"
 
-Reuse the `@emdzej/inpax` IPO interpreter. Implement NCSEXPER's INPA system-function table
-(stubs are fine for `setscreen`/`setmenu`/`userbox*` if we're running headless; route `PEM*`
-to a string buffer). See [`ipo-usage.md`](ipo-usage.md) for the full syscall list.
+Currently gated to CABDs with a complete `ANLIEFERZUSTAND`. For CABDs without one,
+synthesize the default netto by picking each FSW's "default PSW" (probably first listed in
+`PARZUWEISUNG_PSW1`, or a convention we'd need to confirm against a CABD with both
+mechanisms). Splice into the read-back netto. Then the button becomes universal.
 
-## Reference projects (sibling repos)
+### 6. OPFS-backed cache + TraceOverlay persistence (web app Phase 5)
 
-- [`@emdzej/ediabasx`](../../ediabasx/) — EDIABAS / api32 / BEST-VM port. Plug in via wire layer.
-- [`@emdzej/inpax`](../../inpax/) — INPA / IPO interpreter. Reuse for Kernfunktionen.
-- [`@emdzej/bimmerz`](https://github.com/mjaskolski/bimmerz) — earlier POC (superseded by this repo).
+Cache parsed CABD bundles in OPFS so the second visit to a module doesn't re-parse. Draft
+`TraceOverlay` to local persistence so a tab close doesn't lose staged edits.
 
-## Commit log so far
+### 7. Kernfunktionen runner
 
-```
-ddd67b4 docs: NCS↔INPA IPO usage (when, what syscalls, UI hosting)
-0b28221 feat(chassis,fa-asw): real FA → ASW via SWTASW
-6738e92 feat(coder): top-level coding orchestrator
-ce83ae8 feat(ecu-select): walk SGAUSWAHL_* to produce in-scope SG list
-839652c feat(fa-asw): FA token string → ASW bit set
-bbcf967 feat(chassis): chassis bundle loader with lazy CABD
-ad9140d feat(cabd): CABD field decoder + encoder
-68b9eeb feat(predicate): AUFTRAGSAUSDRUCK byte-coded evaluator
-f9e146a feat(text-tables): parsers for SGFAM/AT/ZST/M00/ZUS
-e087bd9 feat(pfl): typed PFL profile parser/serializer
-522948e feat(daten): binary frame parser
-ce7abd3 docs + workspace scaffold
-```
+Wire the non-`A_*` IPOs (`abs_uc.ipo`, `ews.ipo`, …) — those are fully interactive
+(setscreen / setmenu / userbox*). Needs real UI providers; reuse `@emdzej/inpax`'s
+`WebUIProvider`. See [`ipo-usage.md`](ipo-usage.md).
+
+## Reference projects
+
+- [`@emdzej/ediabasx`](../../ediabasx/) — EDIABAS / api32 / BEST-VM port (Web Serial + gateway).
+- [`@emdzej/inpax`](../../inpax/) — INPA / IPO bytecode interpreter with UI providers.
+- [`@emdzej/bimmerz`](https://github.com/mjaskolski/bimmerz) — earlier POC; superseded.

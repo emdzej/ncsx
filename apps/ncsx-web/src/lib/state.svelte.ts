@@ -91,6 +91,10 @@ interface AppState {
   config: WebConfig;
   /** Whether the Settings dialog is open. */
   showSettings: boolean;
+  /** Whether the FA edit dialog is open. */
+  showFaEditor: boolean;
+  /** Whether the ZCS edit dialog is open. */
+  showZcsEditor: boolean;
   install: NcsxInstall | null;
   chassis: Chassis | null;
   /** Display label of the currently-viewed module (formatted as `KMB_E46.C06`). */
@@ -143,6 +147,8 @@ export const app: AppState = $state({
   view: "picker",
   config: loadConfig(),
   showSettings: false,
+  showFaEditor: false,
+  showZcsEditor: false,
   install: null,
   chassis: null,
   selectedSg: null,
