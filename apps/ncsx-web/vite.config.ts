@@ -55,7 +55,6 @@ export default defineConfig({
       "@emdzej/ncsx-options",
       "@emdzej/ncsx-trace",
       "@emdzej/ncsx-cabd",
-      "@emdzej/ncsx-coder",
       "@emdzej/ncsx-ecu-select",
       "@emdzej/ncsx-fa-asw",
       "@emdzej/ncsx-identity",
@@ -63,7 +62,6 @@ export default defineConfig({
       "@emdzej/ncsx-pfl",
       "@emdzej/ncsx-predicate",
       "@emdzej/ncsx-translations",
-      "@emdzej/ncsx-wire",
       // EDIABAS stack — mirror inpax-web's optimizeDeps. The `/client` subpath is the
       // browser-safe slice of @emdzej/ediabasx-interfaces (skips node:net/http/ws).
       "@emdzej/ediabasx-ediabas",

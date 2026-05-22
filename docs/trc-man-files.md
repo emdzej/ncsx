@@ -120,7 +120,33 @@ Plain ASCII. Written when the user clicks "Edit FSW/PSW" in the profile editor (
 
 `FSW_PSW.MAN` ships empty because the default profiles all set `FswPswManipulieren=0`. To get a non-empty sample, load `Expertenmodus.pfl` or `Expertmodus (offen).pfl` (both have `FswPswManipulieren=1`) and edit a value mid-session.
 
-### 4.3 `*.DIF` (referenced but not shipped)
+### 4.3 `NETTODAT.TRC` — netto-data dump
+
+Produced by `coapiTraceNettoData` (ghidra `FUN_004248f0`). Each line:
+
+```
+B <addr_8>,<count_4>,<word_4>,<word_4>,...\r\n
+```
+
+`count` is the number of 4-char hex word groups on the line; each group is 2 sequential ECU bytes (MSB-first within the word).
+
+**`addr` is in WORD/BLOCK units for word-mode chassis** (`SPEICHERORG = WORT`, `wortBreite = 2` — E46 KMB, most BMW E-series). NCSEXPERT advances the address column by the word count, not the byte count: contiguous lines with `count=0x0008` increment `addr` by `+8`, not `+16`. So `B 00000040,0008,...` covers ECU bytes `0x80..0x8F`, not `0x40..0x4F`. For byte-mode chassis (`SPEICHERORG = BYTE`, `wortBreite = 1`) the word and byte address columns coincide.
+
+Verification: in a real NCSEXPERT E46 KMB dump, lines `B 00000038,0008,89DB,...` and `B 00000040,0008,1330,...` are strictly contiguous (cover word ranges `0x38..0x3F` and `0x40..0x47` = byte ranges `0x70..0x7F` and `0x80..0x8F`). The same data interpreted as byte addresses would overlap at `0x40..0x47`, which can't happen in a single read pass — confirming word addressing.
+
+ncsx's `buildNettodatTrc` (`apps/ncsx-web/src/lib/fsw-psw-trc.ts`) writes **byte addresses** instead, because our netto buffer is a byte-indexed `Uint8Array` and emitting word addresses would force every consumer to do a unit conversion. The byte values within each word are MSB-first in both writers, matching the ECU's on-the-wire representation.
+
+When diffing our NETTODAT export against an NCSEXPERT reference for a word-mode chassis:
+
+```
+our byte X   ⇔   NCSEXPERT word (X/2)   ⇔   ECU byte X
+```
+
+So `our[0x40] = 0x13` should match the first byte of NCSEXPERT's word-`0x20` line (or, more often, NCSEXPERT skips uncoded ranges entirely and the comparison only lines up at coded addresses).
+
+This addressing distinction is also load-bearing for the wire: NCSEXPERT's IPO writes the **word address** into the CABI binbuf header bytes `[17,18]`; the SGBD copies that field verbatim into the K-line `ReadMemoryByAddress` telegram, which is block-addressed on word-mode ECUs. Our `CabiProvider.CDHGetApiJobData` divides the byte address by `wortBreite` before populating those header bytes, and `CDHBinBufToNettoData` multiplies the same field back when distributing the response into byte-keyed slots. Drop either half of that round-trip and every FSW past offset 0 reads from the wrong ECU memory location (the `slot[Y] = ECU[2Y]` skew that initially made GETRIEBEART decode as `handschaltung` on an automatic car).
+
+### 4.4 `*.DIF` (referenced but not shipped)
 
 `[DiffDateien]` (`AswDiffFile` / `FswPswDiffFile` / `NettoDatDiffFile`) point to **input** files — the reference snapshots `coapiCompareAsw` etc. diff the live run against. Format is the same as the matching `*.TRC` output (so a previous session's TRC can be promoted to a baseline by renaming it). Not shipped in the stock install.
 

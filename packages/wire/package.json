@@ -1,7 +1,7 @@
 {
   "name": "@emdzej/ncsx-wire",
   "version": "0.0.1",
-  "description": "Wire layer between ncsx's CodingPlan / TraceOverlay and EDIABAS (@emdzej/ediabasx-ediabas). Read/write SG netto buffers over Web Serial.",
+  "description": "Shared EdiabasLike type contract — minimal Ediabas-shape that ncsx packages consume without hard-depending on @emdzej/ediabasx-ediabas.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -13,10 +13,6 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
-  },
-  "dependencies": {
-    "@emdzej/ediabasx-ediabas": "^0.2.2",
-    "@emdzej/ncsx-coder": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",

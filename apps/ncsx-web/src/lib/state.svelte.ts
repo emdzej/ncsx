@@ -104,9 +104,11 @@ interface AppState {
    */
   identity: VehicleIdentity | null;
   /**
-   * Last `CODIERDATEN_LESEN` result for the currently-viewed module, keyed by SGNAME. UI
-   * surfaces this as the "current coding" hex dump and feeds it into future planCoding
-   * calls as `initialNetto`.
+   * Last `CODIERDATEN_LESEN` result for the currently-viewed module. UI
+   * surfaces it as the "current coding" hex dump, drives the per-FSW
+   * "currently coded" indicator in the FunctionTree, and feeds the
+   * pending-edits splicer that builds the `pendingNetto` passed to
+   * `processWriteCoding`.
    */
   lastReadNetto: Uint8Array | null;
   /**

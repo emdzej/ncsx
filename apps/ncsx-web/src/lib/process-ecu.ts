@@ -228,6 +228,18 @@ export async function processReadCoding(
     sgbd,
   });
   handle.cabi.setNettoSlots(slots);
+  // NCSEXPER's C side normally configures the data-org during CABD
+  // load — *before* the IPO runs. Our orchestrator replaces that C
+  // side, so we seed it here. Derive WortBreite from the CABD's
+  // SPEICHERORG (`memoryStructure`) and leave byte-order / addr-mode
+  // at their post-coapiSetCabd defaults: ByteFolge=0 (low-byte
+  // first), AdrMode=0 (linear). The SGBD's `len = 22 + N*WB` check
+  // fails if WB doesn't match the SGBD's hardcoded word width — for
+  // E46 KMB that's 2 (the `mult L0, 2` is a literal in
+  // `C_KMB46.prg::C_S_LESEN`).
+  const wortBreite =
+    functionList.memoryStructure === "BYTE" ? 1 : 2;
+  await handle.cabi.CDHSetDataOrg(wortBreite, 0, 0);
 
   let jobStatus: string | undefined;
   let slotValues: Map<number, number> | undefined;
@@ -266,17 +278,163 @@ export async function processReadCoding(
 }
 
 /**
- * Walk the FunctionList and emit one slot per coded byte address.
- * Deduplicated — overlapping items share a single slot. Sorted by
- * address so CDHGetApiJobData can find contiguous runs.
+ * Walk the FunctionList and emit one slot per byte address the CABD
+ * declares. Deduplicated — overlapping items share a single slot.
+ * Sorted by address so CDHGetApiJobData can find contiguous runs.
+ *
+ * Includes group items (CODIERDATENBLOCK / HERSTELLERDATENBLOCK /
+ * RESERVIERTDATENBLOCK) so we cover the FULL netto extent, not just
+ * bytes carrying a function/property. NCSEXPERT reads byte ranges
+ * declared at the block level too — confirmed by comparing our read
+ * with `NETTODAT.TRC`: ranges like `0x10..0x1F` (sitting inside a
+ * group but with no nested function) are read by NCSEXPERT but were
+ * dropped by us when we filtered groups out.
+ *
+ * When `codingOnly` is true, restrict slot emission to addresses that
+ * fall inside a `CODIERDATENBLOCK` group (groupKind === 'coding').
+ * The ECU rejects writes to `HERSTELLERDATENBLOCK` and
+ * `RESERVIERTDATENBLOCK` regions with `ERROR_ECU_PARAMETER` (status
+ * byte 0xB0); those are diagnostic-readable but not coder-writable.
+ * Used by `processWriteCoding` so SG_CODIEREN only touches the
+ * writable region — matching what NCSEXPER would have NCSdummy's
+ * coding pass produce.
  */
-function flattenSlots(list: FunctionList): Array<{ addr: number }> {
-  const addrs = new Set<number>();
-  for (const item of list.items) {
-    if (item.kind === "group") continue;
-    for (let off = 0; off < item.length; off++) {
-      addrs.add(item.address + off);
+function flattenSlots(
+  list: FunctionList,
+  netto?: Uint8Array,
+  { codingOnly = false }: { codingOnly?: boolean } = {},
+): Array<{ addr: number; value?: number }> {
+  // Build the set of byte addresses contained inside coding groups —
+  // only consulted when `codingOnly` is set.
+  let writableSet: Set<number> | null = null;
+  if (codingOnly) {
+    writableSet = new Set<number>();
+    for (const item of list.items) {
+      if (item.kind !== "group" || item.groupKind !== "coding") continue;
+      for (let off = 0; off < item.length; off++) {
+        writableSet.add(item.address + off);
+      }
     }
   }
-  return [...addrs].sort((a, b) => a - b).map((addr) => ({ addr }));
+  const addrs = new Set<number>();
+  for (const item of list.items) {
+    for (let off = 0; off < item.length; off++) {
+      const addr = item.address + off;
+      if (writableSet && !writableSet.has(addr)) continue;
+      addrs.add(addr);
+    }
+  }
+  const sorted = [...addrs].sort((a, b) => a - b);
+  if (!netto) return sorted.map((addr) => ({ addr }));
+  return sorted.map((addr) => ({
+    addr,
+    value: addr < netto.length ? netto[addr] : 0,
+  }));
+}
+
+export interface WriteCodingResult {
+  ok: boolean;
+  /** EDIABAS JOB_STATUS from the IPO run (`OKAY` on success). */
+  jobStatus?: string;
+  /** Netto bytes the SGBD reported after the write (when re-read landed). */
+  verifiedNetto?: Uint8Array;
+  /** Failure cause when `ok=false`. */
+  error?: string;
+}
+
+/**
+ * Run `SG_CODIEREN` against a live ECU through the per-CABD IPO's
+ * `Cod` handler. Mirrors `processReadCoding` but seeds the slot table
+ * with values from `pendingNetto` instead of zeros — those bytes end
+ * up in the `C_S_SCHREIBEN` (or `C_S_AUFTRAG`) telegram's data
+ * payload. The IPO picks the exact SGBD job based on its internal
+ * `[FSWPSW].SgCodierenAuftrag` equivalent state.
+ *
+ * Optionally re-reads the netto post-write so callers can verify the
+ * SGBD's report (and let users see any auto-checksum-recalc the SGBD
+ * applied). `reread: false` skips that round trip for callers that
+ * want to handle it themselves.
+ *
+ * Same caveat as `processReadCoding`: the SGFAM `row.cabd` resolves
+ * the `A_*.ipo` to dispatch; `sgbd` is the CI-specific EDIABAS module
+ * from SGAUSWAHL.
+ */
+export async function processWriteCoding(
+  row: SgfamRow,
+  sgbd: string,
+  functionList: FunctionList,
+  pendingNetto: Uint8Array,
+  {
+    reread = true,
+    lastReadNetto,
+  }: { reread?: boolean; lastReadNetto?: Uint8Array } = {},
+): Promise<WriteCodingResult> {
+  if (!row.cabd) {
+    return { ok: false, error: `SGFAM row for ${row.sgName} has no CABD — can't load A_*.ipo` };
+  }
+  if (!sgbd) {
+    return { ok: false, error: `No SGBD resolved for ${row.sgName}` };
+  }
+
+  // Slots seeded with the *pending* netto values — CDHGetApiJobData
+  // copies these into the binbuf scratchpad which the SGBD then ships
+  // in the C_S_SCHREIBEN data telegram. Restricted to CODIERDATENBLOCK
+  // addresses: the ECU rejects writes to manufacturer / reserved
+  // regions with status 0xB0 = ERROR_ECU_PARAMETER, which the SGBD
+  // surfaces as JOB_STATUS=ERROR_ECU_PARAMETER. Read path
+  // (processReadCoding) keeps the full netto extent because the ECU
+  // is happy to *read* anywhere. (Empirical: widening the filter
+  // brings ECU_PARAMETER straight back.)
+  const slots = flattenSlots(functionList, pendingNetto, { codingOnly: true });
+  // `lastReadNetto` accepted for future use (diff-only filtering) but
+  // currently NOT applied: empirically a diff-filtered slot table
+  // truncates the slot list early enough that the IPO Cod's
+  // post-write `CDHGetApiJobData` call (used to template the
+  // C_CHECKSUM binbuf) returns bufSize=0, which the IPO forwards into
+  // apiJobData → SGBD bails with ERROR_NO_BIN_BUFFER. Until we
+  // understand how NCSEXPER survives that same dispatch (its decomp
+  // also returns bufSize=0 when slots are exhausted), keep the full
+  // CODIERDATENBLOCK-wide seed.
+  void lastReadNetto;
+  if (slots.length === 0) {
+    return {
+      ok: false,
+      error: `FunctionList for ${row.sgName} has no coded addresses — nothing to write`,
+    };
+  }
+
+  const handle = await startNcsRuntime({ cabdBasename: row.cabd, sgbd });
+  handle.cabi.setNettoSlots(slots);
+  // Same C-side-replacement as the read path — NCSEXPER configures
+  // CDHSetDataOrg during CABD load, before the IPO dispatches.
+  const wortBreite =
+    functionList.memoryStructure === "BYTE" ? 1 : 2;
+  await handle.cabi.CDHSetDataOrg(wortBreite, 0, 0);
+
+  let jobStatus: string | undefined;
+  try {
+    await handle.runCabimain("SG_CODIEREN");
+    jobStatus = handle.cabi.lastJobStatus;
+  } finally {
+    await handle.dispose();
+  }
+
+  if (jobStatus !== "OKAY") {
+    return {
+      ok: false,
+      jobStatus,
+      error: `IPO ran SG_CODIEREN but JOB_STATUS=${jobStatus ?? "(missing)"} — write did not complete cleanly`,
+    };
+  }
+
+  if (!reread) return { ok: true, jobStatus };
+
+  // Verify by re-reading. Uses the same IPO path as a normal Read so
+  // any auto-checksum / mirror bytes the SGBD touched are reflected.
+  const verify = await processReadCoding(row, sgbd, functionList);
+  return {
+    ok: true,
+    jobStatus,
+    verifiedNetto: verify.ok ? verify.netto : undefined,
+  };
 }

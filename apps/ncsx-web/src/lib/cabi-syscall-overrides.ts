@@ -167,12 +167,11 @@ export function buildCabiSystemFunctions(
   const slotHits = new Map<number, number>();
   const slotNames = new Map<number, string>();
   /**
-   * Trace the first N syscalls verbosely so we can see how the IPO
-   * starts up — useful when a flow hangs and the histogram alone
-   * doesn't show the *order*. Tail-end of an infinite loop, the
-   * histogram shows the spinner; the trace shows the lead-up.
+   * Trace the first N syscalls verbosely. Off by default now that
+   * the read+write flow is stable; bump to e.g. 30 when debugging a
+   * new IPO that doesn't make it through cabimain cleanly.
    */
-  const TRACE_FIRST = 30;
+  const TRACE_FIRST = 0;
   for (const slot of NCSEXPER_CABI_SLOTS) {
     slotNames.set(slot.id, slot.name);
     const raw = makeOverride(slot, cabi, opts);

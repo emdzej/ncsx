@@ -122,6 +122,24 @@ export class CabiProvider {
    */
   protected slotCursor = 0;
   /**
+   * Slot range currently waiting on the SGBD's response. Set by
+   * `CDHGetApiJobData` after it builds a request, consumed by
+   * `CDHBinBufToNettoData` to know exactly which slots get which
+   * response bytes — keyed by **slot index**, not by byte/block
+   * address.
+   *
+   * Why bypass the request header's address field: the K-line
+   * `ReadMemoryByAddress` telegram (and therefore the binbuf bytes
+   * 17-18 the SGBD forwards) carries a WORD/BLOCK address on
+   * word-mode chassis, while our slot table is keyed by BYTE
+   * address. Round-tripping the address through the header forces
+   * a units conversion on receive, and any drift between the two
+   * halves (we hit this once) silently mis-distributes every byte
+   * past offset 0. Tracking the slot index range directly removes
+   * that whole class of bug.
+   */
+  protected pendingDistribution: { startIdx: number; count: number } | null = null;
+  /**
    * Live BinBuf handles. Each handle indexes into the map; the
    * underlying storage is a Uint8Array + current logical size.
    * NCSEXPER uses MFC's `CByteArray` and pretends the handle is an
@@ -198,6 +216,13 @@ export class CabiProvider {
       //   • FA_STREAM2STRUCT para="1;<FA_BYTES>"        → par(0)="1", par(1)=<bytes>
       //   • IDENT            para=""                    → no params
       const params = para === '' ? [] : para.split(';');
+      // Diagnostic tap — logs every SGBD job dispatch so the browser
+      // console can be diffed against NCSEXPER's ABLAUF.TRC when a
+      // job hits an unexpected error path. Remove when the write
+      // flow stabilises.
+      console.log(
+        `[CDHapiJob] ecu=${ecu} job=${job} params(${params.length})=[${params.map((p) => JSON.stringify(p)).join(", ")}]`,
+      );
       const sets = await this.ctx.ediabas.executeJob(job, { params });
       this.lastJob.sets = sets.map((set) => {
         const map = new Map<string, unknown>();
@@ -212,6 +237,10 @@ export class CabiProvider {
       // EDIABAS layer threw — typically a transport / SGBD-load failure. Stash
       // an error breadcrumb on jobStatus so a follow-up CDHapiCheckJobStatus
       // doesn't see a stale OK from a previous job.
+      console.error(
+        `[CDHapiJob] ← job=${job} EXCEPTION:`,
+        err,
+      );
       this.lastJob = {
         sets: [],
         jobStatus: err instanceof Error ? err.message : String(err),
@@ -292,6 +321,7 @@ export class CabiProvider {
   async CDHResetApiJobData(): Promise<CdhResult> {
     this.lastJob = { sets: [], jobStatus: '' };
     this.slotCursor = 0;
+    this.pendingDistribution = null;
     for (const s of this.slots) s.flags &= ~2;
     return { retVal: COAPI_OK };
   }
@@ -410,18 +440,44 @@ export class CabiProvider {
     ecu: string,
     job: string,
     bufHandle: number,
-    bufSize: number,
+    _bufSize: number,
     _result: string,
   ): Promise<CdhResult> {
     if (!this.ctx.ediabas) return { retVal: COAPI_DIABAS_INIT_ERROR };
     if (!ecu || !job) return { retVal: COAPI_PAR_ERROR };
     const buf = this.binBufs.get(bufHandle);
     if (!buf) return { retVal: COAPI_INVALID_HANDLE };
-    const n = Math.min(bufSize, buf.size);
-    const hex = bytesToHex(buf.bytes.subarray(0, n));
+    // NCSEXPER **ignores** the `bufSize` parameter the IPO passes
+    // (ghidra FUN_0044d190 → FUN_00453880 = `CDHBinBufRead`, which
+    // outputs the binbuf's `.size` field instead of the caller's
+    // arg). Matters for the IPO Cod path: the `CDHGetApiJobData`
+    // call that templates the C_CHECKSUM binbuf returns `bufSize=0`
+    // when the slot table is exhausted, and the IPO forwards that
+    // 0 here. If we honoured it we'd slice to 0 bytes and the SGBD
+    // would bail with `ERROR_NO_BIN_BUFFER` — even though the binbuf
+    // itself has the header bytes + the `BinBufWriteWord` patches
+    // (start addr, end addr) the IPO laid down. Use `buf.size`
+    // directly to mirror NCSEXPER. `_bufSize` is kept on the
+    // signature for the IPO ABI compatibility but ignored.
+    //
+    // BinBuf bytes go on the BINARY parameter channel (read by the
+    // SGBD's `pary` opcode), not the indexed-string channel. The hex-
+    // string workaround we used before ediabasx 0.2.4 always landed
+    // in `pari` and the SGBD bailed with ERROR_NO_BIN_BUFFER.
+    // Slicing first to clone — ediabasx assumes ownership of the
+    // Uint8Array it gets handed.
+    const para = buf.bytes.slice(0, buf.size);
+    // Diagnostic tap — same as CDHapiJob but for binary-param jobs.
+    // Logs the FULL binbuf in hex so the SGBD packet (data type,
+    // wortBreite, wordCount, wireAddr, payload, terminator) can be
+    // inspected. Crucial for diffing SCHREIBEN/AUFTRAG/CHECKSUM
+    // bytes against what NCSEXPER would have shipped.
+    console.log(
+      `[CDHapiJobData] ecu=${ecu} job=${job} bufHandle=${bufHandle} buf.size=${buf.size} bytes=${bytesToHex(para)}`,
+    );
     try {
       await this.ctx.ediabas.loadSgbd(ecu);
-      const sets = await this.ctx.ediabas.executeJob(job, { params: [hex] });
+      const sets = await this.ctx.ediabas.executeJob(job, { params: [para] });
       this.lastJob.sets = sets.map((set) => {
         const map = new Map<string, unknown>();
         for (const r of set) map.set(r.name, r.value);
@@ -430,8 +486,18 @@ export class CabiProvider {
       const jobStatus = this.findResult('JOB_STATUS');
       this.lastJob.jobStatus =
         typeof jobStatus === 'string' ? jobStatus : String(jobStatus ?? '');
+      console.log(
+        `[CDHapiJobData] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${sets.length}`,
+      );
       return { retVal: COAPI_OK };
     } catch (err) {
+      // When ediabasx's BEST2 interpreter throws, the stack is the
+      // most useful diagnostic — log it before swallowing into
+      // jobStatus.
+      console.error(
+        `[CDHapiJobData] ← job=${job} EXCEPTION:`,
+        err,
+      );
       this.lastJob = {
         sets: [],
         jobStatus: err instanceof Error ? err.message : String(err),
@@ -457,7 +523,7 @@ export class CabiProvider {
    * slots so the same range isn't sent twice.
    */
   async CDHGetApiJobData(
-    _maxData: number,
+    maxData: number,
     bufHandle: number,
   ): Promise<CdhResult<{ bufSize: number; nrOfData: number; dataType: number }>> {
     if (!this.dataOrg) return { retVal: COAPI_ERROR };
@@ -477,22 +543,57 @@ export class CabiProvider {
     // boundaries — we do the same so the SGBD's count*wortBreite math
     // lands on a clean byte boundary.
     const startAddr = this.slots[this.slotCursor]!.addr;
+    // `maxData` is the IPO's per-call records cap. NCSEXPER's
+    // `coapiTraceNettoData` calculates `0x10/WB` (= 8 for WB=2)
+    // for its OWN slot-table walk, and the SGBD's K-line
+    // `ReadMemoryByAddress` caps responses at 16 bytes per call.
+    //
+    // Empirical: when we passed `maxData=16` (the IPO's value)
+    // through unmodified and requested 32-byte reads, the SGBD
+    // returned 32 bytes that decomposed as two overlapping 16-byte
+    // windows (`0x40..0x4F` and `0x48..0x57`, matching NCSEXPER's
+    // `B 00000040` and `B 00000048` trace lines) instead of one
+    // contiguous `0x40..0x5F` window. We then spread those 32 bytes
+    // over the wrong slot addresses, throwing off every FSW decode
+    // past offset 0x10.
+    //
+    // Hard-cap at 8 records per chunk (= 16 bytes for WB=2). This
+    // matches NCSEXPER's trace cadence and stays under the SGBD's
+    // K-line frame budget.
+    const HARD_CAP_RECORDS = 8;
+    const maxRecords =
+      maxData > 0
+        ? Math.min(HARD_CAP_RECORDS, maxData)
+        : HARD_CAP_RECORDS;
+    const maxBytes = maxRecords * wortBreite;
     let endCursor = this.slotCursor + 1;
     while (
       endCursor < this.slots.length &&
+      endCursor - this.slotCursor < maxBytes &&
       (this.slots[endCursor]!.flags & 1) !== 0 &&
       (this.slots[endCursor]!.flags & 2) === 0 &&
       this.slots[endCursor]!.addr === startAddr + (endCursor - this.slotCursor)
     ) {
       endCursor++;
     }
-    let runLen = endCursor - this.slotCursor;
-    // Round DOWN to a wortBreite multiple so the SGBD's len = 22 + N*wortBreite
-    // check (where N = words) passes cleanly.
-    runLen = runLen - (runLen % wortBreite);
-    if (runLen === 0) runLen = wortBreite;
-    const wordCount = runLen / wortBreite;
-    const payloadLen = wordCount * wortBreite;
+    // Number of slots in this contiguous run — what we'll actually
+    // consume. Distinct from the wire-payload length: the SGBD reads
+    // in wortBreite-byte words, so a 5-slot run with wortBreite=2
+    // needs a 6-byte (3-word) read on the wire, but only 5 slots get
+    // their .value populated from the response.
+    const actualLen = endCursor - this.slotCursor;
+    // Round UP to a wortBreite multiple. NCSEXPER's len-check is
+    // `len(input) == 22 + N*wortBreite` so the packet must be word-
+    // aligned; the SGBD reads N words from startAddr, returns N*WB
+    // bytes — the last (payloadLen - actualLen) bytes are read off
+    // the ECU but no slot maps to them, so they're dropped on
+    // distribute. Wasting up to (wortBreite-1) bytes per contiguous
+    // run is fine; previously we rounded DOWN which silently skipped
+    // the trailing odd slot AND advanced the cursor past whatever
+    // slot followed it — wrong values for the last slot of every
+    // run + corruption of the next run's first slot.
+    const payloadLen = Math.ceil(actualLen / wortBreite) * wortBreite;
+    const wordCount = payloadLen / wortBreite;
     const totalLen = 22 + payloadLen;
     const packet = new Uint8Array(totalLen);
     // 22-byte header — mirrors NCSEXPER's MakeHeader (FUN_00443ec0).
@@ -503,17 +604,51 @@ export class CabiProvider {
     // bytes 4..14 stay zero
     packet[15] = wordCount & 0xff;
     packet[16] = (wordCount >> 8) & 0xff;
-    packet[17] = startAddr & 0xff;
-    packet[18] = (startAddr >> 8) & 0xff;
-    // bytes 19..21 stay zero (last is the "overlap" byte the SGBD
-    // overwrites with response[0])
-    // payload bytes 22..end stay zero (scratchpad — SGBD overwrites)
+    // The K-line `ReadMemoryByAddress` telegram the SGBD builds
+    // (`S4[5/6] = input[0x12/0x11]`) carries the address in WORD UNITS
+    // for WB>1 chassis, NOT byte units. Verified against NCSDummy's
+    // `BlockAddress(block, address, isWord) = address/2`: NCSEXPER's
+    // NETTODAT.TRC entry at file address `0x38` describes the word
+    // at byte address `0x70`. So our `slot.addr` (a byte address) has
+    // to be DIVIDED by `wortBreite` before going on the wire. Without
+    // this, byte 0x70 reads from ECU memory 0xE0 instead.
+    const wireAddr = (startAddr / wortBreite) | 0;
+    packet[17] = wireAddr & 0xff;
+    packet[18] = (wireAddr >> 8) & 0xff;
+    // bytes 19..20 stay zero
+    // Data area at offset 0x15 (= 21), `payloadLen` bytes long.
+    //
+    // Confirmed from C_KMB46.prg's BEST2 bytecode: C_S_SCHREIBEN
+    // (and C_S_AUFTRAG / C_S_LESEN distribution) all read/write the
+    // data section at `S2[0x15..0x15+payloadLen-1]`. We previously
+    // wrote scratchpad at packet[22..], which silently worked for
+    // reads (the SGBD's response overwrites S2[0x15..] anyway) but
+    // shifted *writes* by one byte: the SGBD picked up `packet[0x15]`
+    // (the last "header" byte we left as 0) as data byte 0, then our
+    // intended data as bytes 1..N — so every chunk's data landed one
+    // byte later in the ECU than the slot.addr we computed, AND a
+    // zero clobbered the byte at the chunk's first address.
+    //
+    // For READ the slot.value is 0 (zero scratchpad), so the SGBD
+    // overwrites these bytes with the K-line response and our
+    // pendingDistribution-based CDHBinBufToNettoData still reads
+    // from offset 0x15 → unchanged read path.
+    for (let i = 0; i < actualLen; i++) {
+      packet[0x15 + i] = this.slots[this.slotCursor + i]!.value & 0xff;
+    }
     this.writeBinBuf(bufHandle, 0, packet);
-    // Mark slots in-flight + advance cursor.
-    for (let i = this.slotCursor; i < this.slotCursor + runLen; i++) {
+    // Mark in-flight + advance cursor by ACTUAL slots consumed, not
+    // by wire payload length. Stash the slot range so the matching
+    // `CDHBinBufToNettoData` can walk slot indices directly instead
+    // of re-deriving them from the header's wire address (which is
+    // in word units, vs. our byte-keyed slot table — see field comment
+    // on `pendingDistribution`).
+    const startIdx = this.slotCursor;
+    for (let i = startIdx; i < startIdx + actualLen; i++) {
       this.slots[i]!.flags |= 2;
     }
-    this.slotCursor += runLen;
+    this.slotCursor += actualLen;
+    this.pendingDistribution = { startIdx, count: actualLen };
     return {
       retVal: COAPI_OK,
       out: { bufSize: totalLen, nrOfData: 1, dataType: 1 },
@@ -910,46 +1045,43 @@ export class CabiProvider {
 
   /**
    * `CDHBinBufToNettoData(BufHandle, RetVal)` — slot 0x4A. Distribute
-   * the SGBD's response bytes back into the slot table by address.
-   * The buffer contains the 22-byte request header (now partially
-   * stomped by the SGBD's response overlap at offset 0x15) plus N*2
-   * bytes of payload. We recover the start address from header bytes
-   * 17-18, the word count from bytes 15-16, then walk the slot table
-   * from the cursor's last position and assign each in-flight slot's
-   * value from `response_byte & slot.mask`.
+   * the SGBD's response bytes back into the slot table.
    *
-   * The response payload starts at offset 0x15 (last header byte
-   * overlaps response[0]) per the SGBD's emit pattern in C_KMB46.prg.
+   * The buffer contains the 22-byte request header (now partially
+   * stomped by the SGBD's response overlap at offset 0x15) plus
+   * `N*wortBreite` bytes of payload. The first `pendingDistribution.count`
+   * payload bytes are real ECU data; any trailing bytes are the
+   * wortBreite-alignment padding the request padded out for the SGBD's
+   * word-aligned length check (see `CDHGetApiJobData`).
+   *
+   * We walk the slot range stashed by `CDHGetApiJobData` and assign
+   * `response_byte & slot.mask` to each slot in order. This sidesteps
+   * the byte-vs-block-address ambiguity that bit us when we tried to
+   * recover the slot positions from the wire address in the header:
+   * the header carries the K-line WORD address, our slots are keyed
+   * by BYTE address, and the round-trip silently x2-skewed every FSW
+   * past offset 0. Index-based dispatch removes the unit conversion
+   * entirely.
+   *
+   * The response payload starts at offset 0x15 (the last header byte
+   * is overwritten by `response[0]`) per the SGBD's emit pattern in
+   * C_KMB46.prg.
    */
   async CDHBinBufToNettoData(bufHandle: number): Promise<CdhResult> {
     const buf = this.binBufs.get(bufHandle);
     if (!buf) return { retVal: COAPI_INVALID_HANDLE };
     if (buf.size < 22) return { retVal: COAPI_PAR_ERROR };
-    const wortBreite = buf.bytes[1]!;
-    if (wortBreite !== 1 && wortBreite !== 2 && wortBreite !== 4) {
-      return { retVal: COAPI_PAR_ERROR };
-    }
-    const wordCount = buf.bytes[15]! | (buf.bytes[16]! << 8);
-    const addrLow = buf.bytes[17]!;
-    const addrMid = buf.bytes[18]!;
-    const startAddr = addrLow | (addrMid << 8);
-    const payloadLen = wordCount * wortBreite;
-    // SGBD writes response payload starting at offset 0x15 (overlaps
-    // the last header byte). Bytes after that, up to 0x15+payloadLen-1,
-    // are the real ECU data.
+    if (!this.pendingDistribution) return { retVal: COAPI_ERROR };
+    const { startIdx, count } = this.pendingDistribution;
     const payloadStart = 0x15;
-    // Find slots whose address falls in [startAddr, startAddr+payloadLen).
-    for (let i = 0; i < payloadLen; i++) {
-      const addr = startAddr + i;
+    for (let i = 0; i < count; i++) {
+      const slot = this.slots[startIdx + i];
+      if (!slot) break;
       const respByte = buf.bytes[payloadStart + i] ?? 0;
-      const slot = this.slots.find((s) => s.addr === addr);
-      if (slot) {
-        slot.value = slot.mask & respByte;
-        // Clear in-flight bit so a subsequent read of the same range
-        // re-fires (caller can clear all bits via setNettoSlots).
-        slot.flags &= ~2;
-      }
+      slot.value = slot.mask & respByte;
+      slot.flags &= ~2;
     }
+    this.pendingDistribution = null;
     return { retVal: COAPI_OK };
   }
 
