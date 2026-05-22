@@ -1079,7 +1079,14 @@
           onclick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            downloadNettodatTrc(netto, codingAddresses);
+            // NCSEXPER's NETTODAT.TRC uses **word-addressed** B-lines
+            // (`B <wordAddr_8>,<recordCount_4>,<record>,<record>,…`)
+            // where each record is `wortBreite` bytes. Derive WB from
+            // the CABD's memory structure so byte-mode chassis (GM5,
+            // ZKE5_S12) produce single-byte records.
+            const wortBreite =
+              app.functionList?.memoryStructure === "BYTE" ? 1 : 2;
+            downloadNettodatTrc(netto, codingAddresses, wortBreite);
           }}
           title="Download NETTODAT.TRC — same B <addr>,<count>,<words>… format NCSEXPER's coapiTraceNettoData writes to WORK/. Only the bytes actually requested from the ECU (bold above) are dumped; deliveryState filler is omitted."
         >

@@ -216,50 +216,63 @@ export function downloadFswPsw(
 
 /**
  * Produce NETTODAT.TRC text — line-per-contiguous-run dump of the
- * coded bytes. Format matches NCSEXPER's `coapiTraceNettoData`:
+ * coded bytes. Format matches NCSEXPER's `coapiTraceNettoData`
+ * (FUN_004248f0):
  *
- *   B <addr_8>,<count_4>,<word_4>,<word_4>,...\r\n
+ *   B <addr_8>,<count_4>,<record_hex>,<record_hex>,...\n
  *
- * where `count` is the number of 4-char hex word groups on the line
- * (each group = 2 sequential bytes at byte_addr, byte_addr+1) and
- * the address is the byte address of the first word in the line.
- * Lines are 8 words (16 bytes) wide at most; the final line of a
- * contiguous run is shorter when the run isn't a multiple of 16.
+ * where:
+ *
+ * - `addr` is the **word address** of the first record on the line —
+ *   i.e. `byte_addr / wortBreite`. Byte address `0x56` on a WB=2
+ *   chassis appears as `0000002B`. Reference: `B 0000002B,0001,0121`
+ *   in the user's NCS trace.
+ * - `count` is the number of records (not bytes) on the line.
+ * - each `record_hex` is `wortBreite` bytes concatenated as `%02X`,
+ *   no separator within a record.
+ * - `wortBreite` records per chunk = `0x10 / wortBreite`, i.e. 16
+ *   bytes per line at most (8 records for WB=2, 16 for WB=1).
+ * - line terminator is `\n` (single LF), not `\r\n`.
  *
  * Only addresses present in `codingAddresses` get dumped — uncoded
  * filler is skipped, matching NCSEXPER's slot-table-driven write.
- * If a contiguous run starts at an odd byte address, we still emit
- * a B line (NCSEXPER does too — see `B 0000002B,0001,0121` in the
- * reference dump).
+ * Contiguous runs starting at non-word-aligned byte addresses are
+ * preserved verbatim (NCSEXPER's slot table can carry partial-byte
+ * records on byte-mode chassis).
  */
 export function buildNettodatTrc(
   netto: Uint8Array,
   codingAddresses: Set<number>,
+  wortBreite: 1 | 2 = 2,
 ): string {
   const addrs = [...codingAddresses].sort((a, b) => a - b);
   if (addrs.length === 0) return "";
   const lines: string[] = [];
-  // Walk contiguous runs.
+  const recordsPerLine = 16 / wortBreite;
   let runStart = addrs[0]!;
   let runEnd = runStart;
   const flush = (start: number, endExclusive: number): void => {
-    for (let chunkStart = start; chunkStart < endExclusive; chunkStart += 16) {
-      const chunkEnd = Math.min(chunkStart + 16, endExclusive);
-      const wordCount = Math.ceil((chunkEnd - chunkStart) / 2);
-      const words: string[] = [];
-      for (let i = 0; i < wordCount; i++) {
-        const hi = netto[chunkStart + i * 2] ?? 0;
-        const lo = netto[chunkStart + i * 2 + 1] ?? 0;
-        words.push(
-          ((hi << 8) | lo).toString(16).toUpperCase().padStart(4, "0"),
-        );
+    const bytesPerLine = recordsPerLine * wortBreite;
+    for (
+      let chunkStart = start;
+      chunkStart < endExclusive;
+      chunkStart += bytesPerLine
+    ) {
+      const chunkEnd = Math.min(chunkStart + bytesPerLine, endExclusive);
+      const recordCount = Math.ceil((chunkEnd - chunkStart) / wortBreite);
+      const records: string[] = [];
+      for (let i = 0; i < recordCount; i++) {
+        let hex = "";
+        for (let b = 0; b < wortBreite; b++) {
+          const byte = netto[chunkStart + i * wortBreite + b] ?? 0;
+          hex += byte.toString(16).toUpperCase().padStart(2, "0");
+        }
+        records.push(hex);
       }
-      const addrStr = chunkStart
-        .toString(16)
-        .toUpperCase()
-        .padStart(8, "0");
-      const countStr = wordCount.toString(16).toUpperCase().padStart(4, "0");
-      lines.push(`B ${addrStr},${countStr},${words.join(",")}\r\n`);
+      const wordAddr = (chunkStart / wortBreite) | 0;
+      const addrStr = wordAddr.toString(16).toUpperCase().padStart(8, "0");
+      const countStr = recordCount.toString(16).toUpperCase().padStart(4, "0");
+      lines.push(`B ${addrStr},${countStr},${records.join(",")}\n`);
     }
   };
   for (let i = 1; i < addrs.length; i++) {
@@ -279,9 +292,10 @@ export function buildNettodatTrc(
 export function downloadNettodatTrc(
   netto: Uint8Array,
   codingAddresses: Set<number>,
+  wortBreite: 1 | 2 = 2,
   filename = "NETTODAT.TRC",
 ): void {
-  download(buildNettodatTrc(netto, codingAddresses), filename);
+  download(buildNettodatTrc(netto, codingAddresses, wortBreite), filename);
 }
 
 function download(text: string, filename: string): void {
