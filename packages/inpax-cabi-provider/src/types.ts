@@ -47,4 +47,19 @@ export interface CdhContext {
   currentCbd: string | null;
   /** Currently set Codier-Baureihe (chassis code, e.g. `E46`). */
   currentCodierBaureihe: string | null;
+  /**
+   * Raw FA string for the active vehicle, in its native glued form
+   * (`E46_#0306&N6SW%0354$167$1CA$205$832$L7BA`) — same shape NCSEXPER
+   * keeps internally and walks via `strtok` in `getFaElement`
+   * (`FUN_0044fc40`).
+   *
+   * Populated by the host (ncsx-web runtime) from `app.identity.fa`
+   * before kicking off any IPO that touches FA — read back by the
+   * IPO via the `CDHGetFa{Version,Element}` / `CDHGetAnzahlFaElemente`
+   * trio. `null` (or empty) means no FA has been read for this
+   * session; the FA getters then degrade to "empty FA" semantics —
+   * zero elements, empty version — same as NCSEXPER when the user
+   * hasn't loaded one.
+   */
+  fa: string | null;
 }

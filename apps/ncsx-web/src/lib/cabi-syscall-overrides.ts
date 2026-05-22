@@ -511,6 +511,71 @@ function makeOverride(
         writeOut(ctx, args.RetVal, "int", 0);
       };
     }
+
+    case "CDHSetSystemData": {
+      // Slot 0x2C — host or IPO writes a named value into the system-
+      // data store. The IPO doesn't typically write here (it's the
+      // host's job — runtime seeds FAHRGESTELL_NR from
+      // app.identity.vin before SG_CODIEREN), but the slot must still
+      // dispatch through the provider in case some IPO does mirror a
+      // value back. Always reports RetVal=0 (OK) — the provider's Map
+      // can't fail to accept a write.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHSetSystemData(String(args.Bezeichner), String(args.Wert));
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHGetSystemData": {
+      // Slot 0x2D — IPO reads a named host-seeded value. The
+      // SG_CODIEREN flow uses this to pull FAHRGESTELL_NR into a
+      // local var before passing it to C_FG_AUFTRAG's `para`
+      // (`A_GM5.ipo` PC 0x008e..0x009a). Missing key returns empty
+      // string + RetVal=0 — matches NCSEXPER's FUN_00444ca0 semantics.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetSystemData(String(args.Bezeichner));
+        writeOut(ctx, args.Wert, "string", res.out?.wert ?? "");
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+
+    case "CDHGetFaVersion": {
+      // Slot 0x5E — IPO reads the FA's leading chassis-prefix token
+      // (e.g. "E46", "E89"). Backed by `tokenizeFa(ctx.fa)[0]`.
+      // Empty FA → empty version + RetVal=0.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetFaVersion();
+        writeOut(ctx, args.Version, "string", res.out?.version ?? "");
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHGetAnzahlFaElemente": {
+      // Slot 0x5F — IPO reads how many tokens the FA has. Drives the
+      // upper bound of any `for i in 1..N` FA-iteration loop.
+      // Empty/missing FA → 0 → loop body skips, exactly matching
+      // NCSEXPER's "no FA loaded" behaviour.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetAnzahlFaElemente();
+        writeOut(ctx, args.Anzahl, "int", res.out?.anzahl ?? 0);
+      };
+    }
+    case "CDHGetFaElement": {
+      // Slot 0x60 — IPO walks the FA token-by-token. Stateful: the
+      // provider tracks the cursor across calls, with `FirstElement`
+      // resetting it. `Typ` is the first-character filter (NCSEXPER's
+      // `do { strtok(...) } while (tok[0] != typ[0])` loop).
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetFaElement(
+          String(args.Typ),
+          Boolean(args.FirstElement),
+        );
+        writeOut(ctx, args.Element, "string", res.out?.element ?? "");
+      };
+    }
     case "CDHGetCabdPar": {
       return async (ctx) => {
         const args = popArgs(ctx, slot.params);
@@ -540,7 +605,6 @@ function makeOverride(
     case "CDHResetApiJobData":
     case "CDHSetCbdName":
     case "CDHSetSgName":
-    case "CDHSetSystemData":
     case "CDHSetError":
     case "CDHActivateFsw":
     case "CDHInactivateFsw":
@@ -558,7 +622,6 @@ function makeOverride(
     case "CDHCheckIdent":
     case "CDHCheckIdent2":
     case "CDHGetInfo":
-    case "CDHGetSystemData":
     case "CDHGetSgbdName":
     case "CDHReadSget":
     case "CDHGetBaureiheFromZcs":
@@ -568,9 +631,6 @@ function makeOverride(
     case "CDHDelay":
     case "CDHCallAuthenticate":
     case "CDHAuthGetRandom":
-    case "CDHGetFaVersion":
-    case "CDHGetAnzahlFaElemente":
-    case "CDHGetFaElement":
     case "CDHapiResultSets":
     case "CDHapiCheckJobStatus":
     case "CDHGetApiJobByteData":

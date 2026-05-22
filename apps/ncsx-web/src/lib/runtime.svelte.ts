@@ -186,6 +186,12 @@ export async function startNcsRuntime(
       ? `C${app.selectedModule.codingIndex.toString(16).toUpperCase().padStart(2, "0")}`
       : null,
     currentCodierBaureihe: app.chassis?.code ?? null,
+    // Snapshot the FA into the provider so the IPO's `CDHGetFaVersion`
+    // / `CDHGetAnzahlFaElemente` / `CDHGetFaElement` calls can walk it
+    // (mirrors NCSEXPER's MFC side seeding the FA buffer at session
+    // start). `null` if the user hasn't read identity yet — the FA
+    // getters then degrade to "empty FA" semantics.
+    fa: app.identity?.fa ?? null,
   });
 
   // 6. NCSEXPER CABI syscall overrides. The 99-entry slot table comes

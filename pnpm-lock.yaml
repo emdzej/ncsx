@@ -279,6 +279,9 @@ importers:
       '@emdzej/ncsx-chassis':
         specifier: workspace:*
         version: link:../chassis
+      '@emdzej/ncsx-fa-asw':
+        specifier: workspace:*
+        version: link:../fa-asw
       '@emdzej/ncsx-wire':
         specifier: workspace:*
         version: link:../wire

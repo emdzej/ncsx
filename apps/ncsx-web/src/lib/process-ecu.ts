@@ -29,6 +29,7 @@
 
 import { buildFunctionList, type FunctionList } from "@emdzej/ncsx-function-list";
 import type { Chassis } from "@emdzej/ncsx-chassis";
+import { formatFahrgestellNr } from "@emdzej/ncsx-identity";
 import type { SgfamRow } from "@emdzej/ncsx-text-tables";
 import { app } from "./state.svelte";
 import { startNcsRuntime } from "./runtime.svelte";
@@ -410,6 +411,32 @@ export async function processWriteCoding(
   const wortBreite =
     functionList.memoryStructure === "BYTE" ? 1 : 2;
   await handle.cabi.CDHSetDataOrg(wortBreite, 0, 0);
+
+  // Seed the IPO's system-data store with the chassis number so the
+  // IPO can thread it into `C_FG_AUFTRAG`'s `para`. Anchor: A_GM5.ipo
+  // @ PC 0x008e..0x009a does
+  //   CDHGetSystemData("FAHRGESTELL_NR", &local[3])
+  //   → CDHapiJob("C_GM5", "C_FG_AUFTRAG", local[3], "")
+  // and the SGBD's `strlen S1; comp L0, #$12 (=18)` check rejects
+  // anything other than an exactly-18-byte buffer with
+  // `JOB_STATUS = "ERROR_NUMBER_ARGUMENT"`.
+  //
+  // NCSEXPER stores `FAHRGESTELL_NR` as `<17-char VIN><M36 check
+  // char>` (18 chars), computed by `coapiSetFgNr` (FUN_0042a560) via
+  // `CalcMod36CheckSum` over `"FP" + vin`. `formatFahrgestellNr`
+  // (`packages/identity/src/m36-checksum.ts`) is the JS port — same
+  // algorithm, locked by unit tests against the worked
+  // `"FPWBAAA00000PM10277" → 'L'` example.
+  //
+  // Skip silently if identity hasn't been read yet — the IPO's
+  // `TestCDHFehler` path tolerates the missing value (CDHGetSystemData
+  // returns retVal=0 + empty string) and the downstream SGBD will
+  // surface ERROR_NUMBER_ARGUMENT as before, which is a better failure
+  // mode than synthesising a fake FG here.
+  if (app.identity?.vin) {
+    const fgnr = formatFahrgestellNr(app.identity.vin);
+    await handle.cabi.CDHSetSystemData("FAHRGESTELL_NR", fgnr);
+  }
 
   let jobStatus: string | undefined;
   try {

@@ -32,6 +32,7 @@ import {
   COAPI_PAR_ERROR,
 } from './error-codes.js';
 import type { CdhContext, CdhResult } from './types.js';
+import { tokenizeFa } from '@emdzej/ncsx-fa-asw';
 
 /** Lowercase hex → bytes. Tolerates any 2-char-per-byte hex. */
 function bytesToHex(bytes: Uint8Array): string {
@@ -98,6 +99,37 @@ export class CabiProvider {
    * name via `cabdPar(name)` after `runCabimain` returns.
    */
   protected cabdPars: Map<string, string | number> = new Map();
+  /**
+   * Host-seeded system-data store the IPO reads via
+   * `CDHGetSystemData(name)`. Mirrors NCSEXPER's named variable store
+   * (entry `FUN_00431340` → `FUN_00444ca0` aka `GetVariableFswValue`,
+   * which reads from a string-keyed table the host populated earlier
+   * in the session).
+   *
+   * The IPO never writes here — only the host (us) does, via
+   * `CDHSetSystemData`. Canonical keys observed in real IPOs:
+   *   - `FAHRGESTELL_NR` — 17-char chassis number. Threaded into the
+   *     `C_FG_AUFTRAG` job's `para` by SG_CODIEREN's IPO right after
+   *     the coding write (`A_GM5.ipo` @ PC 0x008e..0x009a). Without
+   *     this seeded, the SGBD's `pars S1,#$1` returns empty and the
+   *     job fails with `JOB_STATUS = "ERROR_NUMBER_ARGUMENT"`.
+   *
+   * Other keys may surface as we exercise more IPO families; they
+   * land here transparently because the IPO drives the key names.
+   */
+  protected systemData: Map<string, string> = new Map();
+  /**
+   * FA-walking state. NCSEXPER's `getFaElement` (`FUN_0044fc40`) uses
+   * `strtok` internally — the IPO controls whether to restart from the
+   * beginning (`firstElement = true` → `strtok(buffer, sep)`) or
+   * continue (`firstElement = false` → `strtok(NULL, sep)`).
+   *
+   * We mirror that with an explicit cursor + a snapshot of the
+   * tokens at the moment the walk started — taking a fresh snapshot
+   * each `firstElement=true` call so changes to `ctx.fa` mid-walk
+   * don't shift indices under the IPO's feet.
+   */
+  protected faWalk: { tokens: string[]; cursor: number } = { tokens: [], cursor: 0 };
   /**
    * Word width / endianness / addressing mode set by `CDHSetDataOrg`.
    * Initialized to "not configured" — the IPO must call CDHSetDataOrg
@@ -486,8 +518,25 @@ export class CabiProvider {
       const jobStatus = this.findResult('JOB_STATUS');
       this.lastJob.jobStatus =
         typeof jobStatus === 'string' ? jobStatus : String(jobStatus ?? '');
+      // Diagnostic — full sets dump. Helps when JOB_STATUS alone isn't
+      // enough (e.g. ERROR_BIN_BUFFER could be triggered by the input
+      // length check OR the response length check, and the secondary
+      // result fields tell us which).
+      const setsSummary = this.lastJob.sets.map((set, i) => {
+        const entries: string[] = [];
+        for (const [name, value] of set) {
+          if (value instanceof Uint8Array) {
+            entries.push(`${name}=<bin:${bytesToHex(value)}>`);
+          } else if (typeof value === 'string') {
+            entries.push(`${name}=${JSON.stringify(value)}`);
+          } else {
+            entries.push(`${name}=${String(value)}`);
+          }
+        }
+        return `set[${i}]{${entries.join(', ')}}`;
+      });
       console.log(
-        `[CDHapiJobData] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${sets.length}`,
+        `[CDHapiJobData] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${sets.length} ${setsSummary.join(' | ')}`,
       );
       return { retVal: COAPI_OK };
     } catch (err) {
@@ -560,12 +609,29 @@ export class CabiProvider {
     // Hard-cap at 8 records per chunk (= 16 bytes for WB=2). This
     // matches NCSEXPER's trace cadence and stays under the SGBD's
     // K-line frame budget.
-    const HARD_CAP_RECORDS = 8;
+    // Per-chunk records cap. Higher than the previous 8 because some
+    // byte-mode SGBDs (E46 GM5 / ZKE5_S12) return the **entire coding
+    // region in one response** (~20 bytes) regardless of how many
+    // bytes were requested. If we chunk smaller than the region size,
+    // the SGBD's response-length check (`len(S4) - 4 == wordCount`)
+    // fails with ERROR_BIN_BUFFER even though the ECU answered fine.
+    //
+    // 32 records gives enough headroom for GM5-class SGBDs (need ≥20)
+    // while still capping below the K-line frame budget (KMB's
+    // observed-overlap threshold was around 32 bytes = 16 records for
+    // WB=2, so 32 records for WB=1 stays within the same byte budget).
+    // The IPO's `maxData` (local[4]), when set, further bounds this.
+    const HARD_CAP_RECORDS = 32;
     const maxRecords =
       maxData > 0
         ? Math.min(HARD_CAP_RECORDS, maxData)
         : HARD_CAP_RECORDS;
     const maxBytes = maxRecords * wortBreite;
+    // Diagnostic: log the per-call maxData/wortBreite so we can see
+    // what the IPO is asking for and verify our chunking math.
+    console.log(
+      `[CDHGetApiJobData] startAddr=0x${startAddr.toString(16)} maxData=${maxData} → maxRecords=${maxRecords} (WB=${wortBreite})`,
+    );
     let endCursor = this.slotCursor + 1;
     while (
       endCursor < this.slots.length &&
@@ -601,7 +667,16 @@ export class CabiProvider {
     packet[1] = wortBreite;
     packet[2] = byteFolge;
     packet[3] = adrMode;
-    // bytes 4..14 stay zero
+    // bytes 4..12 stay zero
+    // NCSEXPER's CDHGetApiJobData stores TWO count fields:
+    //   buf[0x0D..0x0E] = payloadLen (= N*wortBreite, "byte count")
+    //   buf[0x0F..0x10] = wordCount  (= N)
+    // Different SGBDs read different offsets for their length check:
+    //   word-mode SGBDs (KMB46_E46, KOMBI46R) read wordCount @0x0F
+    //   byte-mode SGBDs (GM5)                  read payloadLen @0x0D
+    // We populate both so the same packet builder works for either.
+    packet[13] = payloadLen & 0xff;
+    packet[14] = (payloadLen >> 8) & 0xff;
     packet[15] = wordCount & 0xff;
     packet[16] = (wordCount >> 8) & 0xff;
     // The K-line `ReadMemoryByAddress` telegram the SGBD builds
@@ -636,6 +711,21 @@ export class CabiProvider {
     for (let i = 0; i < actualLen; i++) {
       packet[0x15 + i] = this.slots[this.slotCursor + i]!.value & 0xff;
     }
+    // Trailing `0x03` terminator at the last byte of the buffer.
+    //
+    // NCSEXPER's CDHGetApiJobData (FUN_004440f0) unconditionally
+    // writes `(&DAT_00730de5)[uVar3] = 3`, which lands at
+    // packet[21 + payloadLen]. Since totalLen == 22 + payloadLen,
+    // that's the LAST byte of the buffer — the byte the SGBD reads
+    // back as the "end of header / start of next record" marker.
+    //
+    // KMB46R-family `C_S_*` SGBDs tolerate a zero here (our previous
+    // 16-chunk write loop never set this byte and still completed
+    // OKAY), so for word-mode chassis this is correctness-by-mirror
+    // rather than a known-required field. Setting it to match the
+    // reference removes one more "different from NCSEXPER" axis if a
+    // future SG family does enforce it.
+    packet[21 + payloadLen] = 3;
     this.writeBinBuf(bufHandle, 0, packet);
     // Mark in-flight + advance cursor by ACTUAL slots consumed, not
     // by wire payload length. Stash the slot range so the matching
@@ -701,32 +791,128 @@ export class CabiProvider {
     throw new CdhNotImplementedError('CDHGetVmGerName');
   }
 
+  // ── FA walking ──────────────────────────────────────────────────────────────
+  //
+  // Lets the IPO inspect the vehicle's Fahrzeugauftrag — version
+  // prefix, element count, and per-element tokens. NCSEXPER's
+  // reference impls live in `FUN_0044f970` (`getAuftrag` — assembles
+  // an FA buffer from stored fields) and `FUN_0044fc40`
+  // (`getFaElement` — `strtok`-style walk over that buffer with an
+  // optional first-character type filter).
+  //
+  // We back all three with `tokenizeFa(ctx.fa)` from
+  // `@emdzej/ncsx-fa-asw`, which handles both the glued native form
+  // (`E46_#0306&N6SW%0354$167$1CA$205`) and the pre-separated form
+  // (`$BL91 BR91`, `0205,0502,0524`) the BMW family puts into FA
+  // strings. Tokens are uppercased, leading marker chars stripped
+  // (except `#` for date codes — kept because chassis AT records key
+  // on `#0306` directly).
+  //
+  // `ctx.fa` is host-seeded by `runtime.svelte.ts` from
+  // `app.identity.fa`. When unset (e.g. before the identity flow has
+  // run, or for ZCS-master chassis whose identity lacks an FA),
+  // tokens degrade to `[]` — `CDHGetAnzahlFaElemente` returns 0 and
+  // the IPO's `for i in 1..N` walk skips, mirroring "no FA loaded"
+  // in NCSEXPER's MFC side.
+
+  /**
+   * First token from the FA — the chassis prefix (e.g. `E46`,
+   * `E89`). NCSEXPER's `CDHGetFaVersion` returns the same shape
+   * because `getAuftrag`'s first concatenated field is the chassis
+   * identifier (`DAT_00765b3d`).
+   *
+   * Empty string + COAPI_OK when the FA is missing — IPOs that just
+   * log the version (`PEMProtokollZeile`) keep flowing; IPOs that
+   * branch on it land in the same code path NCSEXPER takes when no
+   * FA is loaded.
+   */
   async CDHGetFaVersion(): Promise<CdhResult<{ version: string }>> {
-    throw new CdhNotImplementedError(
-      'CDHGetFaVersion',
-      'FA chassis prefix (E46_, E60_, etc.)',
-    );
+    const tokens = tokenizeFa(this.ctx.fa ?? '');
+    return { retVal: COAPI_OK, out: { version: tokens[0] ?? '' } };
   }
 
+  /**
+   * Total FA element count, **including** the chassis prefix — matches
+   * NCSEXPER, where the buffer `getAuftrag` builds is one
+   * comma/marker-separated stream and `getFaElement` iterates without
+   * skipping the leading version token.
+   */
   async CDHGetAnzahlFaElemente(): Promise<CdhResult<{ anzahl: number }>> {
-    throw new CdhNotImplementedError('CDHGetAnzahlFaElemente');
+    const tokens = tokenizeFa(this.ctx.fa ?? '');
+    return { retVal: COAPI_OK, out: { anzahl: tokens.length } };
   }
 
+  /**
+   * Walk the FA token-by-token. NCSEXPER's `getFaElement`
+   * (`FUN_0044fc40`) is `strtok`-based:
+   *
+   *   - `firstElement = true`  → reset and return the first matching token
+   *   - `firstElement = false` → continue from where the previous call left off
+   *
+   * The `typ` parameter is an optional **first-character filter**:
+   * if empty, return the next token regardless; if non-empty, skip
+   * tokens whose first character doesn't match `typ[0]`. (NCSEXPER's
+   * inner `do { strtok(NULL, sep) } while (local_14[0] != *param_1)`
+   * loop.) Hit the end of the buffer → empty string, COAPI_OK.
+   *
+   * The walk state lives on `this.faWalk` — re-snapshotted on every
+   * `firstElement = true` call so a mid-walk change to `ctx.fa`
+   * doesn't shift indices under the IPO.
+   */
   async CDHGetFaElement(
-    _typ: string,
-    _firstElement: boolean,
+    typ: string,
+    firstElement: boolean,
   ): Promise<CdhResult<{ element: string }>> {
-    throw new CdhNotImplementedError('CDHGetFaElement');
+    if (firstElement) {
+      this.faWalk = {
+        tokens: tokenizeFa(this.ctx.fa ?? ''),
+        cursor: 0,
+      };
+    }
+    const filterChar = typ.length > 0 ? typ[0]!.toUpperCase() : null;
+    while (this.faWalk.cursor < this.faWalk.tokens.length) {
+      const token = this.faWalk.tokens[this.faWalk.cursor]!;
+      this.faWalk.cursor++;
+      if (filterChar === null || token[0]?.toUpperCase() === filterChar) {
+        return { retVal: COAPI_OK, out: { element: token } };
+      }
+    }
+    return { retVal: COAPI_OK, out: { element: '' } };
   }
 
   // ── System / CABD parameters ────────────────────────────────────────────────
 
-  async CDHSetSystemData(_bezeichner: string, _wert: string): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHSetSystemData');
+  /**
+   * Host-side seed: write a named value the IPO will later read via
+   * `CDHGetSystemData`. Idempotent overwrite. The IPO itself doesn't
+   * call this — only the runtime / app does before kicking off a
+   * cabimain dispatch that depends on the value (e.g. seeding
+   * `FAHRGESTELL_NR` from `app.identity.vin` before `SG_CODIEREN`).
+   *
+   * Mirrors NCSEXPER's `CDHSetSystemData` (slot 0x2C) which writes
+   * into the same string-keyed table `CDHGetSystemData` (slot 0x2D)
+   * reads from. Always returns `COAPI_OK` — there's nothing to fail.
+   */
+  async CDHSetSystemData(bezeichner: string, wert: string): Promise<CdhResult> {
+    this.systemData.set(bezeichner, wert);
+    return { retVal: COAPI_OK };
   }
 
-  async CDHGetSystemData(_bezeichner: string): Promise<CdhResult<{ wert: string }>> {
-    throw new CdhNotImplementedError('CDHGetSystemData');
+  /**
+   * IPO-side read: fetch a host-seeded value by name. Missing key →
+   * empty string + `COAPI_OK`, **not** an error. Mirrors NCSEXPER's
+   * `FUN_00444ca0` (`GetVariableFswValue`): a lookup that fails to
+   * resolve still returns 0 (OK) up the call chain via
+   * `CDHGetSystemData` (`FUN_00431340`); only structural lookup
+   * failures bubble up as a non-zero retval. The IPO's
+   * `TestCDHFehler(retval)` only fires on non-zero — empty value
+   * with retval=0 lets the IPO proceed and the downstream SGBD
+   * gets to decide whether the empty input is fatal (it usually
+   * is, but that's the SGBD's job).
+   */
+  async CDHGetSystemData(bezeichner: string): Promise<CdhResult<{ wert: string }>> {
+    const v = this.systemData.get(bezeichner);
+    return { retVal: COAPI_OK, out: { wert: v ?? '' } };
   }
 
   async CDHSetCabdPar(bezeichner: string, wert: string): Promise<CdhResult> {

@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@emdzej/ncsx-chassis": "workspace:*",
+    "@emdzej/ncsx-fa-asw": "workspace:*",
     "@emdzej/ncsx-wire": "workspace:*"
   },
   "devDependencies": {
