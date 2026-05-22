@@ -362,13 +362,6 @@ function makeOverride(
       };
     }
 
-    // ─── CDH state we mostly observe but don't act on ────────────────
-    case "CDHTestError":
-      return (ctx) => {
-        const args = popArgs(ctx, slot.params);
-        writeOut(ctx, args.ErrNr, "int", 0); // "no error" — IPO falls through happy path
-      };
-
     // ─── Slot table + BinBuf — load-bearing for Lesen / Cod ──────────
     case "CDHSetDataOrg":
       return async (ctx) => {

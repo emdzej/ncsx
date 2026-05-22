@@ -580,7 +580,7 @@ export async function processListJobs(
 
   const handle = await startNcsRuntime({ cabdBasename: row.cabd, sgbd });
   let jobStatus: string | undefined;
-  let jobs: string[] = [];
+  const jobs: string[] = [];
   try {
     await handle.runCabimain("JOB_ERMITTELN");
     jobStatus = handle.cabi.lastJobStatus;

@@ -32,14 +32,14 @@ export function tokenizeFa(fa: string): string[] {
   // separate into spaced tokens. Markers listed mirror the chars
   // NCSEXPER's `convertFzgAuftragString` recognises plus `_` (the
   // chassis prefix delimiter).
-  const spaced = fa.replace(/([#&%$_|*+\-])/g, ' $1');
+  const spaced = fa.replace(/([#&%$_|*+-])/g, ' $1');
   const out: string[] = [];
   for (const raw of spaced.split(/[\s,]+/)) {
     if (!raw) continue;
     let t = raw.toUpperCase();
     // Strip leading markers EXCEPT `#` — date codes (`#0306`) are
     // stored with the `#` in AT records, so it stays part of the key.
-    while (t.length > 0 && /[$&%_|*+\-]/.test(t[0]!)) t = t.slice(1);
+    while (t.length > 0 && /[$&%_|*+-]/.test(t[0]!)) t = t.slice(1);
     if (t.length === 0) continue;
     out.push(t);
   }
