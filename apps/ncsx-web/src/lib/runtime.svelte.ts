@@ -32,6 +32,7 @@ import { parseIpo } from "@emdzej/inpax-parser";
 import { VM, MainScheduler } from "@emdzej/inpax-interpreter";
 import { type FunctionBlock } from "@emdzej/inpax-core";
 import { CabiProvider } from "@emdzej/ncsx-inpax-cabi-provider";
+import { formatFahrgestellNr } from "@emdzej/ncsx-identity";
 import { buildCabiSystemFunctions } from "./cabi-syscall-overrides";
 import {
   NullUIProvider,
@@ -267,6 +268,57 @@ export async function startNcsRuntime(
         `cabimain not found in ${cabdBasename}.ipo — IPO is not a CABI-style dispatcher`,
       );
     }
+    // Per-dispatch cabd-par seeding — mirrors NCSEXPER's
+    // FUN_00402c70:
+    //   1. coapiResetCabdPars() — wipe the CMapStringToString.
+    //   2. Push job-specific keys from CDocument fields (typed host
+    //      state) into the freshly-empty map.
+    //   3. Dispatch cabimain.
+    //
+    // Step (1) is implicit for us: every `startNcsRuntime` call
+    // constructs a brand-new CabiProvider with an empty cabdPars
+    // Map, so the dispatch already starts clean. Step (2) is the
+    // mapping below — job-keyed reads from `app.identity` and
+    // `app.chassis`. NCSEXPER's anchor is the inline strcmp
+    // chain in FUN_00402c70 (PC 0x402d25 / 0x402e65 / 0x402ec5).
+    //
+    // APPLIKATION is the one key NCSEXPER preserves across resets
+    // (FUN_0044b880 saves → RemoveAll → restores). We re-seed it
+    // unconditionally here since there's no preserved-across-reset
+    // channel; the chassis code is the natural value.
+    if (app.chassis?.code) {
+      await cabi.CDHSetCabdPar("APPLIKATION", app.chassis.code);
+    }
+    // FAHRGESTELL_NR — seeded only for FGNR_SCHREIBEN, matching
+    // FUN_00402c70's per-job branch. The VIN gets the BMW Mod-36
+    // check character appended (formatFahrgestellNr port of
+    // coapiSetFgNr's CalcMod36CheckSum). Other jobs that need the
+    // VIN (SG_CODIEREN's post-write C_FG_AUFTRAG, FA_WRITE's
+    // FA-bytes channel) read it from `systemData`, not cabd-pars
+    // — different IPC path inside the IPO.
+    if (jobName === "FGNR_SCHREIBEN" && app.identity?.vin) {
+      await cabi.CDHSetCabdPar(
+        "FAHRGESTELL_NR",
+        formatFahrgestellNr(app.identity.vin),
+      );
+    }
+    // ZCS_SCHREIBEN — seed GM/SA/VN keys from the cached ZCS read.
+    // Matches the three coapiSetCabdPar calls at PC 0x402d2f..0x402d5d.
+    if (jobName === "ZCS_SCHREIBEN" && app.identity?.zcs) {
+      const zcs = app.identity.zcs;
+      await cabi.CDHSetCabdPar("GM_SCHLUESSEL", zcs.gm);
+      await cabi.CDHSetCabdPar("SA_SCHLUESSEL", zcs.sa);
+      await cabi.CDHSetCabdPar("VN_SCHLUESSEL", zcs.vn);
+    }
+    // FA_READ / FA_WRITE — NCSEXPER's FUN_00402c70 routes these
+    // through dedicated functions (FUN_0042f800 / FUN_0042f9c0)
+    // that move FA bytes over a separate channel, not the cabd-par
+    // store. Our equivalent: the CabiProvider was constructed with
+    // `fa: app.identity?.fa ?? null` above, so the IPO's
+    // `CDHGetFaVersion` / `CDHGetAnzahlFaElemente` /
+    // `CDHGetFaElement` calls already see the bytes without us
+    // needing to seed anything here.
+
     // NCSEXPER's C side publishes JOBNAME via the CABD-parameter store
     // before invoking the IPO scheduler — cabimain's pc=6 reads it back
     // via CDHGetCabdPar("JOBNAME"). Mirror that: set the param first so

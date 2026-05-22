@@ -12,12 +12,36 @@
   } from "@emdzej/ncsx-function-list";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
-  import { processReadCoding, processWriteCoding } from "../lib/process-ecu";
+  import {
+    processReadCoding,
+    processWriteCoding,
+    processRunJob,
+    processListJobs,
+    type RunJobResult,
+  } from "../lib/process-ecu";
+  import { onMount } from "svelte";
   import { downloadFswPsw, downloadNettodatTrc, parseFswPswMan } from "../lib/fsw-psw-trc";
 
   let filter = $state("");
   let reading = $state(false);
   let applying = $state(false);
+  /**
+   * "Run job" dropdown / execute state.
+   *
+   * - `selectedJob`: which entry from `app.availableJobs` the user
+   *   picked from the dropdown. Cleared on module change. Skips
+   *   `JOB_ERMITTELN` (re-running it isn't useful) and the two
+   *   already-prominent jobs (`CODIERDATEN_LESEN`, `SG_CODIEREN`)
+   *   so the dropdown only surfaces "everything else".
+   * - `runningJob`: name of the job currently in-flight (label flip
+   *   on the Execute button).
+   * - `jobResult`: the most recent `processRunJob` outcome — kept so
+   *   the results panel below the action bar persists until the user
+   *   dismisses it or runs another job.
+   */
+  let selectedJob = $state<string>("");
+  let runningJob = $state<string | null>(null);
+  let jobResult = $state<RunJobResult | null>(null);
   /**
    * Transient post-read confirmation. Set after a successful Read /
    * Apply-then-readback so the user gets explicit feedback that the
@@ -252,6 +276,7 @@
     app.selectedSg = null;
     app.selectedModule = null;
     app.lastReadNetto = null;
+    app.availableJobs = null;
     targets = {};
     app.view = "browse-modules";
   }
@@ -265,6 +290,20 @@
       app.selectedModule?.sgbd != null &&
       pendingNetto != null &&
       pendingEdits.length > 0,
+  );
+
+  /**
+   * "Apply defaults" is enabled whenever a module is loaded, the ECU is
+   * connected, and the CABD carries an `ANLIEFERZUSTAND` byte image. We
+   * deliberately do NOT require a prior read — the whole point of this
+   * button is to overwrite whatever's there with the factory image,
+   * regardless of what's currently coded.
+   */
+  const canApplyDefaults = $derived(
+    connection.status.kind === "connected" &&
+      app.selectedModule?.sgbd != null &&
+      app.functionList != null &&
+      app.functionList.deliveryState.length > 0,
   );
 
   /**
@@ -408,6 +447,229 @@
     }
   }
 
+  /**
+   * Apply the CABD's `ANLIEFERZUSTAND` (factory delivery-state) byte
+   * image to the ECU — same end-state NCSEXPER reaches when the user
+   * runs `SG_CODIEREN` with an empty `FSW_PSW.MAN` and the "FA-defaults"
+   * source. NCSEXPER builds its base worklist from FA tokens and only
+   * overlays user manipulations from the MAN file; with an empty MAN
+   * the resulting netto IS the CABD's ANLIEFERZUSTAND.
+   *
+   * We short-circuit that by handing `functionList.deliveryState`
+   * straight to `processWriteCoding`. The same `flattenSlots(..., {
+   * codingOnly: true })` filter the normal Apply path uses keeps the
+   * write inside the CODIERDATENBLOCK region so the ECU doesn't reject
+   * the manufacturer/reserved bytes with ERROR_ECU_PARAMETER.
+   *
+   * Strong confirm because this overwrites EVERY coded byte — there's
+   * no per-edit diff to scrutinise.
+   */
+  async function onApplyDefaults(): Promise<void> {
+    if (
+      !connection.session ||
+      !app.selectedModule?.sgbd ||
+      !app.functionList ||
+      !app.chassis
+    )
+      return;
+    const umrsg = app.selectedModule.umrsg;
+    const row = umrsg ? app.chassis.sgfam.get(umrsg) : undefined;
+    if (!row) {
+      app.error = `No SGFAM row for ${umrsg ?? "selected SG"} — can't dispatch SG_CODIEREN via the per-CABD IPO`;
+      return;
+    }
+    const deliveryState = app.functionList.deliveryState;
+    if (deliveryState.length === 0) {
+      app.error = `${app.selectedModule.sgbd}'s CABD has no ANLIEFERZUSTAND byte image — can't apply defaults`;
+      return;
+    }
+    const ok = window.confirm(
+      `Apply factory defaults to ${app.selectedModule.sgbd}?\n\n` +
+        `This overwrites EVERY coded byte with the CABD's ANLIEFERZUSTAND ` +
+        `(${deliveryState.length} bytes — what BMW shipped this control unit ` +
+        `revision with). It's the same end-state NCSEXPER reaches when SG_CODIEREN ` +
+        `runs with an empty FSW_PSW.MAN.\n\n` +
+        `Your current ECU coding will be lost. Read first if you want a backup ` +
+        `via Export FSW_PSW.TRC.\n\n` +
+        `Dispatch SG_CODIEREN through ${row.cabd}.IPO?`,
+    );
+    if (!ok) return;
+    applying = true;
+    app.error = null;
+    try {
+      const result = await processWriteCoding(
+        row,
+        app.selectedModule.sgbd,
+        app.functionList,
+        deliveryState,
+        // No lastReadNetto: we're intentionally writing every coding
+        // byte, not diffing against a previously-read state.
+      );
+      if (!result.ok) {
+        app.error = `Apply defaults failed: ${result.error ?? result.jobStatus ?? "(no status)"}`;
+        return;
+      }
+      targets = {};
+      if (result.verifiedNetto) {
+        app.lastReadNetto = result.verifiedNetto;
+      }
+      const verifiedLen = result.verifiedNetto?.length;
+      flashReadStatus(
+        "apply",
+        `Defaults applied — wrote ${deliveryState.length} bytes to ${app.selectedModule.sgbd}${verifiedLen !== undefined ? ` · re-read ${verifiedLen} bytes` : ""}`,
+      );
+    } catch (err) {
+      app.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      applying = false;
+    }
+  }
+
+  /**
+   * Jobs we surface in the "Run job" dropdown — everything the IPO
+   * declared via `JOB_ERMITTELN`, minus the three jobs that already
+   * have dedicated buttons. The user shouldn't need to dig into a
+   * dropdown to do the common things.
+   *
+   * - `JOB_ERMITTELN` — used internally; running it again is a no-op
+   *   from the user's perspective (we already cache the result).
+   * - `CODIERDATEN_LESEN` — exposed as the "Read from ECU" button.
+   * - `SG_CODIEREN` — exposed as "Apply" (when there are pending
+   *   edits) and "Apply defaults" (without).
+   *
+   * Everything else (`INFO`, `SG_IDENT`, `FGNR_LESEN`, `FA_READ`,
+   * `FGNR_SCHREIBEN`, `FA_WRITE`, `ZCS_LESEN`, `ZCS_LOESCHEN`,
+   * `KEY_MEMORY_NR`, `NETTODATEN_SCHREIBEN`,
+   * `TEILBEREICH_CODIEREN`, `CODIERINDEX_LESEN`) lands in the
+   * dropdown unfiltered. Write-class jobs flow through a confirm
+   * dialog in `onRunJob`.
+   */
+  const runnableJobs = $derived.by(() => {
+    if (!app.availableJobs) return [];
+    const hidden = new Set([
+      "JOB_ERMITTELN",
+      "CODIERDATEN_LESEN",
+      "SG_CODIEREN",
+    ]);
+    return app.availableJobs.filter((j) => !hidden.has(j));
+  });
+
+  /**
+   * Heuristic: jobs whose name suggests they modify ECU state. We
+   * gate these behind an extra confirm in `onRunJob`. Matches the
+   * suffixes BMW uses across A_*.ipo declarations
+   * (SCHREIBEN/CODIEREN/LOESCHEN/WRITE). False positives are
+   * acceptable — better one extra click than a silent write.
+   */
+  function isDestructiveJob(jobName: string): boolean {
+    return /SCHREIBEN$|CODIEREN$|LOESCHEN$|_WRITE$/.test(jobName);
+  }
+
+  /**
+   * Fallback `JOB_ERMITTELN` runner — covers the manual-pick path
+   * in `ModuleList.svelte` (which doesn't go through `processEcu`)
+   * and the case where the eager load in `processEcu` failed.
+   * Idempotent: only runs when `availableJobs` is still null.
+   */
+  onMount(() => {
+    if (
+      !connection.session ||
+      !app.selectedModule?.sgbd ||
+      !app.chassis ||
+      app.availableJobs != null
+    )
+      return;
+    const umrsg = app.selectedModule.umrsg;
+    const row = umrsg ? app.chassis.sgfam.get(umrsg) : undefined;
+    if (!row?.cabd) return;
+    const sgbd = app.selectedModule.sgbd;
+    void processListJobs(row, sgbd)
+      .then((result) => {
+        if (result.ok && result.jobs) {
+          app.availableJobs = result.jobs;
+        }
+      })
+      .catch((err: unknown) => {
+        console.warn("[FunctionTree] JOB_ERMITTELN failed:", err);
+      });
+  });
+
+  /**
+   * Dispatch the dropdown-picked job through the per-CABD IPO and
+   * stash the result for the panel below the action bar to render.
+   * Mirrors NCSEXPER's "Choose job → Execute" pair (Image 5 in the
+   * design docs): the user picks any job the IPO exposes and we run
+   * it through `cabimain`, then surface whatever the SGBD published.
+   *
+   * Destructive jobs (SCHREIBEN/CODIEREN/LOESCHEN/WRITE suffix) get
+   * a strong confirm — they expect upstream state we may not have
+   * seeded (netto slots, FAHRGESTELL_NR, FA contents) and can fail
+   * in ECU-modifying ways. Read-class jobs run without extra
+   * friction.
+   */
+  async function onRunJob(): Promise<void> {
+    if (
+      !connection.session ||
+      !app.selectedModule?.sgbd ||
+      !app.chassis ||
+      !selectedJob
+    )
+      return;
+    const umrsg = app.selectedModule.umrsg;
+    const row = umrsg ? app.chassis.sgfam.get(umrsg) : undefined;
+    if (!row?.cabd) {
+      app.error = `No SGFAM row for ${umrsg ?? "selected SG"} — can't dispatch ${selectedJob} via the per-CABD IPO`;
+      return;
+    }
+    if (isDestructiveJob(selectedJob)) {
+      const ok = window.confirm(
+        `Run ${selectedJob} on ${app.selectedModule.sgbd}?\n\n` +
+          `This is a write-class job and may modify the ECU. Common ` +
+          `failure modes: missing input state (FAHRGESTELL_NR, netto ` +
+          `slots, FA contents) — those just return a SGBD-level error. ` +
+          `But if the inputs ARE present, the write WILL go through.\n\n` +
+          `Dispatch ${selectedJob} through ${row.cabd}.IPO?`,
+      );
+      if (!ok) return;
+    }
+    runningJob = selectedJob;
+    jobResult = null;
+    app.error = null;
+    try {
+      const result = await processRunJob(row, app.selectedModule.sgbd, selectedJob);
+      jobResult = result;
+      if (!result.ok) {
+        app.error =
+          result.error ??
+          `${selectedJob} failed with JOB_STATUS=${result.jobStatus ?? "(missing)"}`;
+      }
+    } catch (err) {
+      app.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      runningJob = null;
+    }
+  }
+
+  /**
+   * Format a single result-set value for the results panel. Strings
+   * pass through, numbers stringify, Uint8Arrays render as compact
+   * hex. Anything else falls back to JSON so we don't truncate
+   * unexpected shapes.
+   */
+  function formatJobValue(value: unknown): string {
+    if (value instanceof Uint8Array) {
+      return Array.from(value, (b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+    }
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (value === null || value === undefined) return "";
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
   const fmtAddr = (n: number): string => n.toString(16).toUpperCase().padStart(8, "0");
   const fmtByte = (b: number): string => b.toString(16).toUpperCase().padStart(2, "0");
   const fmtMask = (m: Uint8Array): string => Array.from(m, fmtByte).join(" ");
@@ -452,6 +714,12 @@
 </script>
 
 <div class="mx-auto max-w-5xl p-6">
+  <!--
+    ECU header (compact). Just identity + resolution metadata + the
+    back link — the actual action surface lives in the dedicated
+    action bar below so users see a clear separation between "what
+    am I looking at" and "what can I do to it".
+  -->
   <div class="mb-4 flex items-baseline justify-between gap-2">
     <div>
       <h2 class="text-2xl font-bold text-foreground">{app.selectedSg}</h2>
@@ -494,75 +762,161 @@
         </p>
       {/if}
     </div>
-    <div class="flex items-center gap-3">
-      <button
-        class="rounded border border-divider bg-surface px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-        onclick={onReadFromEcu}
-        disabled={!canRead || reading || applying}
-        title={canRead
-          ? `Issue CODIERDATEN_LESEN against ${app.selectedModule?.sgbd}`
-          : connection.status.kind !== "connected"
-            ? "Connect to ECU first"
-            : "No SGBD resolved for this module"}
-      >
-        {reading ? "Reading…" : "Read from ECU"}
-      </button>
-      <button
-        class="rounded border border-divider bg-surface px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-        onclick={() => {
-          if (app.functionList && app.lastReadNetto)
-            downloadFswPsw("trc", app.functionList, app.lastReadNetto);
-        }}
-        disabled={!app.functionList || !app.lastReadNetto}
-        title={app.lastReadNetto
-          ? "Download FSW_PSW.TRC — full snapshot of currently-active FSW/PSW pairs (same format NCSEXPER's coapiTraceFswPsw writes to WORK/)"
-          : "Read from the ECU first — TRC mirrors the post-read FSW/PSW state"}
-      >
-        Export FSW_PSW.TRC
-      </button>
-      <button
-        class="rounded border border-divider bg-surface px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-        onclick={() => {
-          if (app.functionList) downloadFswPsw("man", app.functionList, targets);
-        }}
-        disabled={!app.functionList || pendingEdits.length === 0}
-        title={pendingEdits.length > 0
-          ? "Download FSW_PSW.MAN — staged edits only, in NCSdummy's manipulation format. Drop into NCSEXPER's WORK/ and set [FSWPSW].FswPswLeseDatei=FSW_PSW.MAN to have NCSEXPER apply these before SG_CODIEREN."
-          : "Stage at least one PSW edit first"}
-      >
-        Export FSW_PSW.MAN
-      </button>
-      <!--
-        Hidden file input pretends to be a normal button via the
-        adjacent `<button>` that calls `.click()`. Keeps the styling
-        consistent with the other toolbar buttons (file inputs are
-        notoriously hard to theme cross-browser).
-      -->
-      <input
-        type="file"
-        accept=".MAN,.man,.txt,text/plain"
-        class="hidden"
-        bind:this={manFileInput}
-        onchange={onImportMan}
-      />
-      <button
-        class="rounded border border-divider bg-surface px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-        onclick={() => manFileInput?.click()}
-        disabled={!app.functionList}
-        title={app.functionList
-          ? "Import FSW_PSW.MAN — pick a previously-exported MAN file (or one written by NCSEXPER / NCSdummy) and stage every FSW/PSW pair it contains as a pending edit. Existing staged edits are kept; the file's pairs overlay them by FSW id."
-          : "Load a module first"}
-      >
-        Import FSW_PSW.MAN
-      </button>
-      <button
-        class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
-        onclick={back}
-      >
-        ← back to modules
-      </button>
-    </div>
+    <button
+      class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
+      onclick={back}
+    >
+      ← back to modules
+    </button>
   </div>
+
+  <!--
+    Action bar. Mirrors NCSEXPER's "Change job" / "Execute job"
+    surface (image #5 in the design docs) but laid out as a single
+    inline row above the function list rather than as a modal +
+    F-key footer. Primary affordances on the left, generic
+    "Run job" dropdown on the right.
+
+    Hidden until the vehicle's FA/ZCS has been read. Every job on
+    this surface depends on identity state — CODIERDATEN_LESEN
+    seeds slot bytes against the FA-derived ASW, SG_CODIEREN refuses
+    without FAHRGESTELL_NR in the CABD scratchpad, and the dropdown
+    routes through the same IPOs. Letting users click these
+    without identity loaded surfaces opaque SGBD errors; the
+    pointer to IdentityPanel is clearer.
+  -->
+  {#if !app.identity}
+    <section
+      class="mb-4 rounded border border-divider bg-surface p-3 text-xs text-faint"
+    >
+      <p class="font-semibold text-muted">Jobs unavailable</p>
+      <p class="mt-1">
+        Read the vehicle's <span class="font-mono">FA</span> or
+        <span class="font-mono">ZCS</span> first (panel above) — read,
+        write, and the per-IPO job dispatcher all need identity in
+        the CABD scratchpad before the SGBD will accept them.
+      </p>
+    </section>
+  {:else}
+  <div
+    class="mb-4 flex flex-wrap items-center gap-2 rounded border border-rule bg-surface p-3"
+  >
+    <button
+      class="rounded border border-divider bg-base px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={onReadFromEcu}
+      disabled={!canRead || reading || applying}
+      title={canRead
+        ? `Issue CODIERDATEN_LESEN against ${app.selectedModule?.sgbd}`
+        : connection.status.kind !== "connected"
+          ? "Connect to ECU first"
+          : "No SGBD resolved for this module"}
+    >
+      {reading ? "Reading…" : "Read from ECU"}
+    </button>
+    <button
+      class="rounded border border-rose-500/70 bg-rose-500/20 px-3 py-1.5 text-xs font-semibold text-rose-900 transition hover:border-rose-400 hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-40 dark:text-rose-50"
+      onclick={onApplyDefaults}
+      disabled={!canApplyDefaults || applying || reading}
+      title={canApplyDefaults
+        ? `Overwrite EVERY coded byte with ${app.selectedModule?.sgbd}'s ANLIEFERZUSTAND — same end-state as NCSEXPER's SG_CODIEREN with an empty FSW_PSW.MAN. Strong confirm before write.`
+        : connection.status.kind !== "connected"
+          ? "Connect to ECU first"
+          : !app.functionList
+            ? "Load a module first"
+            : "This CABD has no ANLIEFERZUSTAND byte image"}
+    >
+      {applying ? "Writing…" : "Apply defaults"}
+    </button>
+    <span class="mx-1 h-5 w-px bg-divider" aria-hidden="true"></span>
+    <button
+      class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={() => {
+        if (app.functionList && app.lastReadNetto)
+          downloadFswPsw("trc", app.functionList, app.lastReadNetto);
+      }}
+      disabled={!app.functionList || !app.lastReadNetto}
+      title={app.lastReadNetto
+        ? "Download FSW_PSW.TRC — full snapshot of currently-active FSW/PSW pairs (same format NCSEXPER's coapiTraceFswPsw writes to WORK/)"
+        : "Read from the ECU first — TRC mirrors the post-read FSW/PSW state"}
+    >
+      Export FSW_PSW.TRC
+    </button>
+    <button
+      class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={() => {
+        if (app.functionList) downloadFswPsw("man", app.functionList, targets);
+      }}
+      disabled={!app.functionList || pendingEdits.length === 0}
+      title={pendingEdits.length > 0
+        ? "Download FSW_PSW.MAN — staged edits only, in NCSdummy's manipulation format. Drop into NCSEXPER's WORK/ and set [FSWPSW].FswPswLeseDatei=FSW_PSW.MAN to have NCSEXPER apply these before SG_CODIEREN."
+        : "Stage at least one PSW edit first"}
+    >
+      Export FSW_PSW.MAN
+    </button>
+    <!--
+      Hidden file input pretends to be a normal button via the
+      adjacent `<button>` that calls `.click()`. Keeps the styling
+      consistent with the other toolbar buttons (file inputs are
+      notoriously hard to theme cross-browser).
+    -->
+    <input
+      type="file"
+      accept=".MAN,.man,.txt,text/plain"
+      class="hidden"
+      bind:this={manFileInput}
+      onchange={onImportMan}
+    />
+    <button
+      class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={() => manFileInput?.click()}
+      disabled={!app.functionList}
+      title={app.functionList
+        ? "Import FSW_PSW.MAN — pick a previously-exported MAN file (or one written by NCSEXPER / NCSdummy) and stage every FSW/PSW pair it contains as a pending edit. Existing staged edits are kept; the file's pairs overlay them by FSW id."
+        : "Load a module first"}
+    >
+      Import FSW_PSW.MAN
+    </button>
+    <!--
+      Run-job dropdown gets its own row — `basis-full` in a
+      flex-wrap container forces the wrapper to break to a new
+      line so the Read/Apply/Export cluster stays cleanly on row 1
+      regardless of viewport width. Without this, narrow screens
+      reflow "Other jobs" + dropdown + Execute partially next to
+      the buttons above (label trails on row 1, dropdown wraps to
+      row 2 — see screenshot in the design notes).
+    -->
+    {#if runnableJobs.length > 0}
+      <div class="flex w-full basis-full items-center gap-2 pt-2">
+        <label class="text-xs text-faint" for="run-job-select">Other jobs</label>
+        <select
+          id="run-job-select"
+          class="rounded border border-divider bg-base px-2 py-1 text-xs text-foreground transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
+          bind:value={selectedJob}
+          disabled={runningJob != null || reading || applying}
+          title="Pick any job the SG's A_*.ipo declared via JOB_ERMITTELN — same list NCSEXPER's Change-job dialog shows. JOB_ERMITTELN, CODIERDATEN_LESEN, and SG_CODIEREN are hidden because the buttons above already cover them."
+        >
+          <option value="" disabled>Choose a job…</option>
+          {#each runnableJobs as job (job)}
+            <option value={job}>{job}</option>
+          {/each}
+        </select>
+        <button
+          class="rounded border border-accent/70 bg-accent/15 px-3 py-1 text-xs font-medium text-foreground transition hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+          onclick={onRunJob}
+          disabled={!selectedJob || runningJob != null || reading || applying ||
+            connection.status.kind !== "connected"}
+          title={connection.status.kind !== "connected"
+            ? "Connect to ECU first"
+            : selectedJob
+              ? `Dispatch ${selectedJob} through ${app.selectedModule?.sgbd}'s A_*.ipo. Write-class jobs (SCHREIBEN/CODIEREN/LOESCHEN/WRITE suffix) prompt for confirmation first.`
+              : "Pick a job from the dropdown first"}
+        >
+          {runningJob ? `Running ${runningJob}…` : "Execute"}
+        </button>
+      </div>
+    {/if}
+  </div>
+  {/if}
 
   {#if readStatus}
     <div
@@ -583,6 +937,85 @@
       >
         dismiss
       </button>
+    </div>
+  {/if}
+
+  <!--
+    Job-result panel. Shows whatever the most-recent `Run job`
+    invocation surfaced via `processRunJob` — the SGBD's EDIABAS
+    result sets plus any `CDHSetCabdPar` writes the IPO did during
+    the run. Persists until the user dismisses or runs another job.
+  -->
+  {#if jobResult}
+    <div
+      class="mb-4 rounded border border-divider bg-surface text-xs text-foreground"
+      role="status"
+    >
+      <div class="flex items-baseline justify-between gap-2 border-b border-divider px-3 py-2">
+        <span>
+          <span class="font-semibold">
+            {jobResult.ok ? "✓" : "✗"}
+            {jobResult.jobName}
+          </span>
+          <span class="ml-2 text-faint">
+            JOB_STATUS = <span class="font-mono">{jobResult.jobStatus ?? "—"}</span>
+            · {jobResult.sets.length} result set{jobResult.sets.length === 1 ? "" : "s"}
+            · {Object.keys(jobResult.cabdPars).length} cabd par{Object.keys(jobResult.cabdPars).length === 1 ? "" : "s"}
+          </span>
+        </span>
+        <button
+          class="text-faint underline-offset-2 hover:text-muted hover:underline"
+          onclick={() => (jobResult = null)}
+        >
+          dismiss
+        </button>
+      </div>
+      {#if jobResult.error}
+        <div class="border-b border-divider px-3 py-2 text-rose-500 dark:text-rose-300">
+          {jobResult.error}
+        </div>
+      {/if}
+      <!--
+        Result sets — one block per `ergsX(...)` group in the SGBD's
+        bytecode. Multi-record jobs (e.g. FS_LESEN) emit several;
+        single-set jobs (INFO, SG_IDENT) emit one. Keys come from the
+        SGBD's `ergs("NAME", value)` calls.
+      -->
+      {#each jobResult.sets as set, idx (idx)}
+        {@const entries = [...set.entries()]}
+        {#if entries.length > 0}
+          <div class="border-b border-divider px-3 py-2">
+            {#if jobResult.sets.length > 1}
+              <p class="mb-1 text-faint">Set {idx + 1} / {jobResult.sets.length}</p>
+            {/if}
+            <dl class="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-0.5 font-mono">
+              {#each entries as [k, v] (k)}
+                <dt class="text-muted">{k}</dt>
+                <dd class="break-all text-foreground">{formatJobValue(v)}</dd>
+              {/each}
+            </dl>
+          </div>
+        {/if}
+      {/each}
+      {#if Object.keys(jobResult.cabdPars).length > 0}
+        <!--
+          CABD-par dump. JOB_ERMITTELN-class jobs publish via this
+          channel rather than EDIABAS result sets, so we render it
+          as a second block. Sorted by key so the JOB[1..N] sequence
+          appears in declaration order.
+        -->
+        <details class="px-3 py-2">
+          <summary class="cursor-pointer select-none text-faint">
+            CABD pars set during run ({Object.keys(jobResult.cabdPars).length})
+          </summary>
+          <dl class="mt-2 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-0.5 font-mono">
+            {#each Object.entries(jobResult.cabdPars).sort(([a], [b]) => a.localeCompare(b)) as [k, v] (k)}
+              <dt class="text-muted">{k}</dt>
+              <dd class="break-all text-foreground">{String(v)}</dd>
+            {/each}
+          </dl>
+        </details>
+      {/if}
     </div>
   {/if}
 

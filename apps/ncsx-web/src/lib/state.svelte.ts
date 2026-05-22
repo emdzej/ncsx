@@ -112,6 +112,20 @@ interface AppState {
    */
   lastReadNetto: Uint8Array | null;
   /**
+   * Job names the currently-viewed SG declares via its `A_*.ipo`
+   * `JOB_ERMITTELN` dispatcher. NCSEXPER's "Change job" dialog
+   * (Image 5 in the design docs) renders this same list — we mirror
+   * it so users can run any job the IPO exposes, not just the
+   * read/write pair we wire explicitly. Cleared on module change.
+   *
+   * - `null`  → not yet enumerated (load pending or failed)
+   * - `[]`    → ran but the IPO declared zero jobs (shouldn't happen
+   *             on real IPOs but defensive)
+   * - `[...]` → ordered list, first entry is conventionally
+   *             `JOB_ERMITTELN` itself
+   */
+  availableJobs: string[] | null;
+  /**
    * Community-maintained NCSDummy-style keyword→English dictionary. Loaded once on app
    * startup from `/translations.csv`; null until the fetch settles. UI components fall
    * back to raw keywords when the lookup is unavailable.
@@ -136,6 +150,7 @@ export const app: AppState = $state({
   functionList: null,
   identity: null,
   lastReadNetto: null,
+  availableJobs: null,
   translations: null,
   error: null,
   busy: false,

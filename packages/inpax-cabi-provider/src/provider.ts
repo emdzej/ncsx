@@ -264,6 +264,26 @@ export class CabiProvider {
       const jobStatus = this.findResult('JOB_STATUS');
       this.lastJob.jobStatus =
         typeof jobStatus === 'string' ? jobStatus : String(jobStatus ?? '');
+      // Response-side trace — mirrors the CDHapiJobData pattern. Without
+      // this the console only shows the dispatch, leaving "did the SGBD
+      // answer? what did it return?" invisible to anyone debugging an
+      // IPO run.
+      const setsSummary = this.lastJob.sets.map((set, i) => {
+        const entries: string[] = [];
+        for (const [name, value] of set) {
+          if (value instanceof Uint8Array) {
+            entries.push(`${name}=<bin:${bytesToHex(value)}>`);
+          } else if (typeof value === 'string') {
+            entries.push(`${name}=${JSON.stringify(value)}`);
+          } else {
+            entries.push(`${name}=${String(value)}`);
+          }
+        }
+        return `set[${i}]{${entries.join(', ')}}`;
+      });
+      console.log(
+        `[CDHapiJob] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${sets.length} ${setsSummary.join(' | ')}`,
+      );
       return { retVal: COAPI_OK };
     } catch (err) {
       // EDIABAS layer threw — typically a transport / SGBD-load failure. Stash
@@ -291,11 +311,13 @@ export class CabiProvider {
     _apiFormat: string,
   ): Promise<CdhResult<{ resultText: string }>> {
     const v = this.findResultInSet(apiResult, apiSet);
-    if (v === undefined) return { retVal: COAPI_ERROR };
-    return {
-      retVal: COAPI_OK,
-      out: { resultText: typeof v === 'string' ? v : String(v) },
-    };
+    if (v === undefined) {
+      console.log(`[CDHapiResultText] ${apiResult}[set=${apiSet}] → MISSING`);
+      return { retVal: COAPI_ERROR };
+    }
+    const out = typeof v === 'string' ? v : String(v);
+    console.log(`[CDHapiResultText] ${apiResult}[set=${apiSet}] → ${JSON.stringify(out)}`);
+    return { retVal: COAPI_OK, out: { resultText: out } };
   }
 
   /** `CDHapiResultInt( out: int ResultVal, in: string ApiResult, in: int ApiSet );` */
@@ -304,9 +326,16 @@ export class CabiProvider {
     apiSet: number,
   ): Promise<CdhResult<{ resultVal: number }>> {
     const v = this.findResultInSet(apiResult, apiSet);
-    if (v === undefined) return { retVal: COAPI_ERROR };
+    if (v === undefined) {
+      console.log(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → MISSING`);
+      return { retVal: COAPI_ERROR };
+    }
     const n = typeof v === 'number' ? v : Number(v);
-    if (!Number.isFinite(n)) return { retVal: COAPI_ERROR };
+    if (!Number.isFinite(n)) {
+      console.log(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → NOT_FINITE(${String(v)})`);
+      return { retVal: COAPI_ERROR };
+    }
+    console.log(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → ${n}`);
     return { retVal: COAPI_OK, out: { resultVal: n } };
   }
 
@@ -316,8 +345,13 @@ export class CabiProvider {
     apiSet: number,
   ): Promise<CdhResult<{ resultVal: boolean }>> {
     const v = this.findResultInSet(apiResult, apiSet);
-    if (v === undefined) return { retVal: COAPI_ERROR };
-    return { retVal: COAPI_OK, out: { resultVal: Boolean(v) } };
+    if (v === undefined) {
+      console.log(`[CDHapiResultDigital] ${apiResult}[set=${apiSet}] → MISSING`);
+      return { retVal: COAPI_ERROR };
+    }
+    const out = Boolean(v);
+    console.log(`[CDHapiResultDigital] ${apiResult}[set=${apiSet}] → ${out}`);
+    return { retVal: COAPI_OK, out: { resultVal: out } };
   }
 
   /** `CDHapiResultAnalog( out: real ResultVal, in: string ApiResult, in: int ApiSet );` */
@@ -326,9 +360,16 @@ export class CabiProvider {
     apiSet: number,
   ): Promise<CdhResult<{ resultVal: number }>> {
     const v = this.findResultInSet(apiResult, apiSet);
-    if (v === undefined) return { retVal: COAPI_ERROR };
+    if (v === undefined) {
+      console.log(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → MISSING`);
+      return { retVal: COAPI_ERROR };
+    }
     const n = typeof v === 'number' ? v : Number(v);
-    if (!Number.isFinite(n)) return { retVal: COAPI_ERROR };
+    if (!Number.isFinite(n)) {
+      console.log(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → NOT_FINITE(${String(v)})`);
+      return { retVal: COAPI_ERROR };
+    }
+    console.log(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → ${n}`);
     return { retVal: COAPI_OK, out: { resultVal: n } };
   }
 
@@ -811,6 +852,16 @@ export class CabiProvider {
     // future SG family does enforce it.
     packet[21 + payloadLen] = 3;
     this.writeBinBuf(bufHandle, 0, packet);
+    // Truncate the binbuf's logical size to the new packet length.
+    // `writeBinBuf` only ever grows `buf.size`; without this, a short
+    // tail chunk (e.g. the final 2-word read of an N-byte netto)
+    // inherits the previous 16-word chunk's size, and CDHapiJobData
+    // ships `buf.bytes.slice(0, buf.size)` — which drags the prior
+    // read's leftover bytes past the new packet's terminator. The
+    // SGBD's `len == 22 + N*WB` check then fails on the size mismatch
+    // and returns ERROR_BIN_BUFFER for the last read in the loop.
+    const lastBuf = this.binBufs.get(bufHandle);
+    if (lastBuf) lastBuf.size = totalLen;
     // Mark in-flight + advance cursor by ACTUAL slots consumed, not
     // by wire payload length. Stash the slot range so the matching
     // `CDHBinBufToNettoData` can walk slot indices directly instead
@@ -1001,6 +1052,7 @@ export class CabiProvider {
 
   async CDHSetCabdPar(bezeichner: string, wert: string): Promise<CdhResult> {
     this.cabdPars.set(bezeichner, wert);
+    console.log(`[CDHSetCabdPar] ${bezeichner} = ${JSON.stringify(wert)}`);
     return { retVal: COAPI_OK };
   }
 
@@ -1011,6 +1063,7 @@ export class CabiProvider {
 
   async CDHSetCabdWordPar(bezeichner: string, wert: number): Promise<CdhResult> {
     this.cabdPars.set(bezeichner, wert | 0);
+    console.log(`[CDHSetCabdWordPar] ${bezeichner} = ${wert | 0}`);
     return { retVal: COAPI_OK };
   }
 
@@ -1027,6 +1080,42 @@ export class CabiProvider {
    */
   cabdPar(name: string): string | number | undefined {
     return this.cabdPars.get(name);
+  }
+
+  /**
+   * Read-only iterator over the entire CABD-parameter store. Useful
+   * for surfaces that don't know the key set up front — e.g. a
+   * generic "run job" UI that wants to display whatever the IPO
+   * wrote during the run (JOB_ERMITTELN's `JOB[1..N]`, INFO's
+   * miscellaneous pars, etc.). Returns a snapshot — callers can
+   * iterate without worrying about provider mutation.
+   */
+  allCabdPars(): ReadonlyMap<string, string | number> {
+    return new Map(this.cabdPars);
+  }
+
+  /**
+   * Prime the per-instance CABD store with values the host has stashed
+   * from earlier runs. Lets job runs that depend on prior-published
+   * state (e.g. `FAHRGESTELL_NR` set by an earlier `FGNR_LESEN`,
+   * `FA_STREAM` from `FA_READ`) read it back via `CDHGetCabdPar` even
+   * though each `runCabimain` dispatch uses a fresh provider instance.
+   *
+   * Mirrors NCSEXPER's MFC-side stash: its document object owns the
+   * cabd-par store for the session, and each IPO dispatch sees it
+   * pre-populated with whatever the prior dispatch published. We
+   * approximate that by seeding on construction and draining on
+   * dispose — host-side persistence lives in `app.cabdParStore`.
+   *
+   * Entries are merged in — pre-existing keys (rare on a fresh
+   * provider, but possible if the host already did some seeding via
+   * direct CDHSetCabdPar calls) survive unless overwritten by the
+   * seed.
+   */
+  seedCabdPars(entries: Iterable<readonly [string, string | number]>): void {
+    for (const [k, v] of entries) {
+      this.cabdPars.set(k, v);
+    }
   }
 
   /** Clear the CABD-parameter store between unrelated reads. */
@@ -1460,6 +1549,18 @@ export class CabiProvider {
   /** Last seen `JOB_STATUS` from the most recent `CDHapiJob`. `'OKAY'` on success. */
   get lastJobStatus(): string {
     return this.lastJob.jobStatus;
+  }
+
+  /**
+   * Read-only snapshot of the most-recent job's result sets. Each
+   * set is a `Map<resultName, value>` shaped like what
+   * `EDIABAS_apiResultSet`s expose. Used by host code that wants to
+   * surface a generic job's full payload (e.g. a "Run job" UI) —
+   * narrower-purpose readers should use `findResult(name)` or
+   * `findResultInSet(name, idx)`.
+   */
+  get lastJobSets(): ReadonlyArray<ReadonlyMap<string, unknown>> {
+    return this.lastJob.sets;
   }
 
   protected findResultInSet(name: string, setIndex: number): unknown {

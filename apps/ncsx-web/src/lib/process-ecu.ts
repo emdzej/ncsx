@@ -161,7 +161,24 @@ export async function processEcu(
     },
   };
   app.lastReadNetto = null;
+  app.availableJobs = null;
   app.view = "view-module";
+
+  // Enumerate the IPO's declared jobs in the background — same shape
+  // NCSEXPER's "Change job" dialog uses. Doesn't block the view from
+  // opening; if it fails, the action bar just shows the explicit
+  // Read/Apply buttons without the "Run job" dropdown.
+  void processListJobs(row, physical.sgbd)
+    .then((result) => {
+      if (result.ok && result.jobs) {
+        app.availableJobs = result.jobs;
+      }
+    })
+    .catch((err: unknown) => {
+      // Non-fatal — the explicit Read/Apply buttons still work even
+      // without the enumerated list.
+      console.warn("[processEcu] JOB_ERMITTELN failed:", err);
+    });
 
   return {
     ok: true,
@@ -464,4 +481,185 @@ export async function processWriteCoding(
     jobStatus,
     verifiedNetto: verify.ok ? verify.netto : undefined,
   };
+}
+
+export interface ListJobsResult {
+  ok: boolean;
+  /** Job names the CABD's IPO declared via JOB[N] / JOB_ANZAHL. */
+  jobs?: string[];
+  jobStatus?: string;
+  error?: string;
+}
+
+/**
+ * Enumerate the SG's available jobs by dispatching `JOB_ERMITTELN`
+ * through the per-CABD IPO — same call NCSEXPER's "Change job" dialog
+ * makes to build its list (screenshot reference in
+ * `docs/ncsexper-job-list.md` if it exists).
+ *
+ * Each `A_*.ipo` has a `Jobs` function the cabimain switch routes to
+ * when JOBNAME == "JOB_ERMITTELN". That function unconditionally
+ * emits `CDHSetCabdPar("JOB[1]", "<name1>")`,
+ * `CDHSetCabdPar("JOB[2]", "<name2>")`, … followed by
+ * `CDHSetCabdPar("JOB_ANZAHL", "<N>")` with the count. We read back
+ * from `cabi.cabdPar(...)` after the run.
+ *
+ * The job set is **static per IPO** — declared at IPO authoring time
+ * by BMW. It doesn't depend on connected-ECU state, but we still
+ * route through the runtime so the dispatcher's Jobs function fires
+ * (the strings live in IPO constants, not in any data file we could
+ * read directly).
+ *
+ * AKMB exposes 14 jobs (JOB_ERMITTELN, INFO, CODIERINDEX_LESEN,
+ * SG_CODIEREN, TEILBEREICH_CODIEREN, FGNR_SCHREIBEN, ZCS_LOESCHEN,
+ * CODIERDATEN_LESEN, FGNR_LESEN, ZCS_LESEN, NETTODATEN_SCHREIBEN,
+ * SG_IDENT, FA_READ, FA_WRITE). GM5 exposes 9 (no FA_*, no
+ * ZCS_* — different SGBD generation). The list is always returned
+ * in the order the IPO declares them.
+ */
+export async function processListJobs(
+  row: SgfamRow,
+  sgbd: string,
+): Promise<ListJobsResult> {
+  if (!row.cabd) {
+    return { ok: false, error: `SGFAM row for ${row.sgName} has no CABD — can't load A_*.ipo` };
+  }
+  if (!sgbd) {
+    return { ok: false, error: `No SGBD resolved for ${row.sgName}` };
+  }
+
+  const handle = await startNcsRuntime({ cabdBasename: row.cabd, sgbd });
+  let jobStatus: string | undefined;
+  let jobs: string[] = [];
+  try {
+    await handle.runCabimain("JOB_ERMITTELN");
+    jobStatus = handle.cabi.lastJobStatus;
+    // Read `JOB[1]..JOB[N]`. Stop the moment we miss one (defensive
+    // — if `JOB_ANZAHL` lies, we still walk up to that bound but
+    // bail early on a gap).
+    const rawCount = handle.cabi.cabdPar("JOB_ANZAHL");
+    const count =
+      typeof rawCount === "string"
+        ? Number.parseInt(rawCount, 10)
+        : typeof rawCount === "number"
+          ? rawCount
+          : 0;
+    if (Number.isFinite(count) && count > 0) {
+      for (let i = 1; i <= count; i++) {
+        const v = handle.cabi.cabdPar(`JOB[${i}]`);
+        if (typeof v !== "string" || v.length === 0) break;
+        jobs.push(v);
+      }
+    }
+  } finally {
+    await handle.dispose();
+  }
+
+  return { ok: true, jobs, jobStatus };
+}
+
+/**
+ * Decoded shape of a single `CDHapiJob` result set — what
+ * `cabi.lastJob.sets[i]` carries after a job runs. Keys come from the
+ * SGBD's `ergX("NAME", value)` calls; values are whatever ediabasx
+ * marshals out (typically string / number / Uint8Array).
+ */
+export type JobResultSet = ReadonlyMap<string, unknown>;
+
+export interface RunJobResult {
+  ok: boolean;
+  /** Job that was dispatched. */
+  jobName: string;
+  /** All result sets the SGBD emitted (one per `ergsi` block etc.). */
+  sets: JobResultSet[];
+  /** EDIABAS JOB_STATUS the IPO's apiJob left in lastJob. */
+  jobStatus?: string;
+  /** All `CDHSetCabdPar(...)` values the IPO wrote during this run — surfaced for jobs like JOB_ERMITTELN that publish via CABD pars rather than result sets. */
+  cabdPars: Record<string, string | number>;
+  /** EDIABAS-layer error text if the IPO threw out of the interpreter. */
+  error?: string;
+}
+
+/**
+ * Run an arbitrary CABD-known job by name through the per-CABD IPO
+ * dispatcher. Use for jobs that don't have a dedicated orchestrator
+ * (e.g. `INFO`, `SG_IDENT`, `KEY_MEMORY_NR`) or for manual one-shots
+ * from a "Run job" UI.
+ *
+ * Caveats:
+ *   - WRITE-class jobs (`SG_CODIEREN`, `FGNR_SCHREIBEN`, `FA_WRITE`,
+ *     `NETTODATEN_SCHREIBEN`, `TEILBEREICH_CODIEREN`, `ZCS_LOESCHEN`)
+ *     typically expect upstream state — netto slots seeded via
+ *     `CDHSetNettoData`, FAHRGESTELL_NR in system-data, FA seeded on
+ *     the provider, etc. Without that prep they'll usually return a
+ *     SGBD-level error (`ERROR_NUMBER_ARGUMENT`,
+ *     `ERROR_NO_BIN_BUFFER`) but won't damage anything they didn't
+ *     have the inputs to write.
+ *   - READ-class jobs are safe to invoke directly — no prep, no
+ *     side-effect.
+ *
+ * Returns the SGBD's result sets plus the cabdPars map so the UI can
+ * format whichever surface the job exposes.
+ */
+export async function processRunJob(
+  row: SgfamRow,
+  sgbd: string,
+  jobName: string,
+): Promise<RunJobResult> {
+  if (!row.cabd) {
+    return {
+      ok: false,
+      jobName,
+      sets: [],
+      cabdPars: {},
+      error: `SGFAM row for ${row.sgName} has no CABD — can't load A_*.ipo`,
+    };
+  }
+  if (!sgbd) {
+    return {
+      ok: false,
+      jobName,
+      sets: [],
+      cabdPars: {},
+      error: `No SGBD resolved for ${row.sgName}`,
+    };
+  }
+
+  const handle = await startNcsRuntime({ cabdBasename: row.cabd, sgbd });
+  let jobStatus: string | undefined;
+  let sets: JobResultSet[] = [];
+  const cabdPars: Record<string, string | number> = {};
+  try {
+    await handle.runCabimain(jobName);
+    jobStatus = handle.cabi.lastJobStatus;
+    // Public accessor on CabiProvider — returns ReadonlyArray of
+    // ReadonlyMap, we copy into mutable Maps for the caller.
+    // Tolerate provider builds without the accessor (Vite can cache
+    // a pre-accessor dist for the lifetime of a dev session).
+    const rawSets = handle.cabi.lastJobSets ?? [];
+    sets = rawSets.map((set) => new Map(set));
+    // Pull whatever the IPO wrote into CABD pars during the run.
+    // This catches jobs like JOB_ERMITTELN that publish their results
+    // through `CDHSetCabdPar` rather than EDIABAS result sets.
+    const map =
+      typeof handle.cabi.allCabdPars === "function"
+        ? handle.cabi.allCabdPars()
+        : new Map<string, string | number>();
+    for (const [k, v] of map) {
+      cabdPars[k] = v;
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      jobName,
+      sets,
+      cabdPars,
+      jobStatus,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    await handle.dispose();
+  }
+
+  return { ok: true, jobName, sets, cabdPars, jobStatus };
 }

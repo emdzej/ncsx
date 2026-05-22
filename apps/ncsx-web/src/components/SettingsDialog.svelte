@@ -72,6 +72,7 @@
     app.selectedModule = null;
     app.functionList = null;
     app.lastReadNetto = null;
+    app.availableJobs = null;
   }
 
   async function forgetInstall(): Promise<void> {

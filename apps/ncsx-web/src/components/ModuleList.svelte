@@ -113,6 +113,7 @@
         resolution: { kind: "manual" },
       };
       app.lastReadNetto = null;
+      app.availableJobs = null;
       app.view = "view-module";
     } catch (err) {
       app.error = err instanceof Error ? err.message : String(err);
@@ -151,8 +152,30 @@
     )} `.C??` files on disk).
   </p>
 
+  <!--
+    Process ECU is gated on a successful FA/ZCS read. Without identity
+    we can't filter SGs by what's actually installed, we can't run
+    FA-aware writes, and the auto-selected `.Cxx` lookup leans on
+    chassis state the identity load primes. Until then we show a
+    pointer to the IdentityPanel above; the manual-browse list below
+    stays open so users can still explore coding variants.
+  -->
   <div class="mb-4 space-y-3">
-    <EcuList />
+    {#if app.identity}
+      <EcuList />
+    {:else}
+      <section
+        class="rounded border border-divider bg-surface p-3 text-xs text-faint"
+      >
+        <p class="font-semibold text-muted">Process ECU unavailable</p>
+        <p class="mt-1">
+          Read the vehicle's <span class="font-mono">FA</span> or
+          <span class="font-mono">ZCS</span> first (panel above) — the per-ECU
+          read/write flow uses the identity to pick the right coding variant
+          and to filter the SG list to what's actually installed.
+        </p>
+      </section>
+    {/if}
   </div>
 
   <details class="mb-4">
