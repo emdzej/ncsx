@@ -369,7 +369,7 @@
             {#if filteredCodes.length === 0}
               <li class="p-2 text-faint italic">No codes match "{search}".</li>
             {:else}
-              {#each filteredCodes.slice(0, 200) as c (c.code)}
+              {#each filteredCodes as c (c.code)}
                 {@const present = stagedSet.has(c.code)}
                 <li
                   class="flex items-baseline justify-between gap-2 border-b border-divider/40 px-2 py-1 last:border-b-0"
@@ -395,11 +395,6 @@
                   </button>
                 </li>
               {/each}
-              {#if filteredCodes.length > 200}
-                <li class="p-2 text-center text-faint italic">
-                  …showing first 200 of {filteredCodes.length} matches. Narrow the search to see more.
-                </li>
-              {/if}
             {/if}
           </ul>
         </div>
