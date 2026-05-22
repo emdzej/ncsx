@@ -310,14 +310,25 @@ export async function startNcsRuntime(
       await cabi.CDHSetCabdPar("SA_SCHLUESSEL", zcs.sa);
       await cabi.CDHSetCabdPar("VN_SCHLUESSEL", zcs.vn);
     }
-    // FA_READ / FA_WRITE — NCSEXPER's FUN_00402c70 routes these
-    // through dedicated functions (FUN_0042f800 / FUN_0042f9c0)
-    // that move FA bytes over a separate channel, not the cabd-par
-    // store. Our equivalent: the CabiProvider was constructed with
-    // `fa: app.identity?.fa ?? null` above, so the IPO's
-    // `CDHGetFaVersion` / `CDHGetAnzahlFaElemente` /
-    // `CDHGetFaElement` calls already see the bytes without us
-    // needing to seed anything here.
+    // FA_WRITE — NCSEXPER's coapiWriteAuftrag (FUN_0042f9c0) seeds
+    // the raw FA token string as the `FA_STREAM` cabd-par before
+    // dispatching the IPO. The IPO then reads it via
+    // `CDHGetCabdPar("FA_STREAM")`, converts to bytes (typically
+    // through the FA.PRG `FA_STREAM2STRUCT` job), and ships via
+    // `apiJobData(sgbd, "FA_SCHREIBEN", …)`.
+    //
+    // The typed FA-walker channel — `fa:` passed to the CabiProvider
+    // constructor, surfaced via `CDHGetFaVersion` /
+    // `CDHGetAnzahlFaElemente` / `CDHGetFaElement` — is a separate
+    // IPC used by FA-decode IPOs that iterate FA element-by-element.
+    // FA_WRITE doesn't use it.
+    //
+    // FA_READ needs no seed — the IPO PRODUCES `FA_STREAM` via
+    // CDHSetCabdPar during the run, and we surface it in the result
+    // panel.
+    if (jobName === "FA_WRITE" && app.identity?.fa) {
+      await cabi.CDHSetCabdPar("FA_STREAM", app.identity.fa);
+    }
 
     // NCSEXPER's C side publishes JOBNAME via the CABD-parameter store
     // before invoking the IPO scheduler — cabimain's pc=6 reads it back

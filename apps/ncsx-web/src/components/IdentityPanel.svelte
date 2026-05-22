@@ -67,6 +67,86 @@
     });
   });
 
+  /**
+   * Decoded ZCS: the SA-bit set the ECU returned, mapped through the
+   * chassis `<BR>ZST.000` table to (FSW, comment) pairs the user can
+   * read. ZST rows carry a `saMask` (16-hex, 64-bit). A row is active
+   * when every bit of its mask is set in the user's SA — same
+   * membership test NCSEXPER uses internally when expanding ZCS to
+   * the per-SG worklist. Rows are grouped by `saCode` so the user
+   * sees one entry per shipped SA package, with its constituent FSWs
+   * listed underneath.
+   *
+   * GM and VN aren't bit-decoded — they're scalar identifiers (model
+   * code, version number) with no per-bit semantics.
+   */
+  const decodedZcs = $derived.by<
+    Array<{
+      saCode: string;
+      comment: string;
+      fsws: Array<{ keyword: string; description: string | null }>;
+    }>
+  >(() => {
+    if (!app.chassis?.zst || !app.identity?.zcs?.sa) return [];
+    const saHex = app.identity.zcs.sa.trim();
+    if (saHex.length === 0) return [];
+    let userSa: bigint;
+    try {
+      userSa = BigInt("0x" + saHex);
+    } catch {
+      return [];
+    }
+    const tr = app.translations?.entries;
+    const grouped = new Map<
+      string,
+      {
+        saCode: string;
+        comment: string;
+        fsws: Array<{ keyword: string; description: string | null }>;
+        seenFsws: Set<string>;
+      }
+    >();
+    for (const rec of app.chassis.zst.file.records) {
+      if (!rec.saMask || /^0+$/.test(rec.saMask)) continue;
+      let mask: bigint;
+      try {
+        mask = BigInt("0x" + rec.saMask);
+      } catch {
+        continue;
+      }
+      if (mask === 0n) continue;
+      // A row contributes when every bit of its `saMask` is set in
+      // the user's SA. Partial overlaps are ignored — NCSEXPER's
+      // expansion only fires when the SA pattern includes the row's
+      // full mask.
+      if ((userSa & mask) !== mask) continue;
+      const key = rec.saCode || `mask:${rec.saMask}`;
+      let entry = grouped.get(key);
+      if (!entry) {
+        entry = {
+          saCode: rec.saCode,
+          comment: rec.comment ?? "",
+          fsws: [],
+          seenFsws: new Set(),
+        };
+        grouped.set(key, entry);
+      }
+      if (rec.fsw && !entry.seenFsws.has(rec.fsw)) {
+        entry.seenFsws.add(rec.fsw);
+        entry.fsws.push({
+          keyword: rec.fsw,
+          description: describeFaKeywordWithFallback(rec.fsw, tr),
+        });
+      }
+      // Multiple rows with the same code may carry different comments
+      // (e.g. one per marker variant). Prefer the first non-empty.
+      if (!entry.comment && rec.comment) entry.comment = rec.comment;
+    }
+    return [...grouped.values()]
+      .map(({ saCode, comment, fsws }) => ({ saCode, comment, fsws }))
+      .sort((a, b) => a.saCode.localeCompare(b.saCode));
+  });
+
   /** Cached SG-install summary for the Details panel footer. */
   const installSummary = $derived.by<{ total: number; installed: number } | null>(
     () => {
@@ -235,7 +315,7 @@
     <h3 class="text-sm font-semibold text-foreground">Vehicle identity</h3>
     {#if app.identity}
       <div class="flex items-center gap-3">
-        {#if app.identity.fa}
+        {#if app.identity.fa || app.identity.zcs}
           <button
             class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
             onclick={() => (showDetails = !showDetails)}
@@ -303,10 +383,6 @@
                 SA <span class="ml-1 text-foreground">{id.zcs.sa}</span>
               </div>
               <div>VN <span class="ml-1 text-foreground">{id.zcs.vn}</span></div>
-              <div class="mt-0.5 text-faint italic">
-                SA bit-set decoding (via <span class="font-mono">{app.chassis?.code}ZST.*</span>)
-                — not yet wired
-              </div>
             {:else}
               — <span class="text-faint">({id.zcsStatus})</span>
             {/if}
@@ -366,6 +442,72 @@
                   -->
                   <p class="ml-3 mt-0.5 text-faint italic">
                     {t.atComment}
+                  </p>
+                {/if}
+                {#if t.fsws.length > 0}
+                  <ul class="ml-3 mt-0.5 space-y-0.5">
+                    {#each t.fsws as f (f.keyword)}
+                      <li class="flex items-baseline gap-2 text-faint">
+                        <span class="font-mono text-muted">{f.keyword}</span>
+                        {#if f.description}
+                          <span>— {f.description}</span>
+                        {/if}
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {/if}
+
+    {#if showDetails && id.zcs}
+      <!--
+        Decoded ZCS panel — ZCS-master chassis (E36/E38/E39/E46/E53)
+        encode the SA bit-set as a 16-hex-char field. Each ZST row
+        with a non-zero `saMask` whose bits are fully present in the
+        user's SA is shown as one active code with its FSWs listed
+        underneath (same shape as the decoded-FA panel above). GM/VN
+        are scalar identifiers — already rendered raw above; no
+        bit-decoding needed.
+      -->
+      <div class="mt-3 rounded border border-divider bg-base p-2 text-xs">
+        <div class="mb-2 flex items-baseline justify-between gap-2 text-faint">
+          <span class="font-semibold uppercase tracking-wider">
+            Decoded ZCS · {decodedZcs.length} active code{decodedZcs.length === 1 ? "" : "s"}
+          </span>
+          {#if app.chassis}
+            <span>
+              from <span class="font-mono">{app.chassis.code}ZST.*</span>
+            </span>
+          {/if}
+        </div>
+        {#if !app.chassis?.zst}
+          <p class="text-faint italic">
+            Chassis <span class="font-mono">{app.chassis?.code}</span> ships no
+            <span class="font-mono">ZST</span> table — can't decode SA bits.
+          </p>
+        {:else if decodedZcs.length === 0}
+          <p class="text-faint italic">
+            No <span class="font-mono">ZST</span> rows matched the SA bit-set.
+            Either the chassis SA pattern is unknown to this DATEN release, or
+            the ECU returned an empty SA.
+          </p>
+        {:else}
+          <ul class="space-y-1.5">
+            {#each decodedZcs as t (t.saCode)}
+              <li class="border-b border-divider/40 pb-1 last:border-b-0 last:pb-0">
+                <div class="flex items-baseline gap-2">
+                  <span class="font-mono text-foreground">{t.saCode}</span>
+                  {#if t.fsws.length === 0}
+                    <span class="text-faint italic">— no FSWs mapped</span>
+                  {/if}
+                </div>
+                {#if t.comment}
+                  <p class="ml-3 mt-0.5 text-faint italic">
+                    {t.comment}
                   </p>
                 {/if}
                 {#if t.fsws.length > 0}
