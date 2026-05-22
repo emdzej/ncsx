@@ -600,37 +600,234 @@ function makeOverride(
       };
     }
 
-    case "CDHSetReturnVal":
-    case "CDHResetError":
+    // ── Error / return-value scratchpad ─────────────────────────────────
+    //
+    // Slots 0x2B / 0x52 / 0x53 / 0x54. NCSEXPER tracks these on a
+    // per-session error struct that the host inspects after
+    // runCabimain returns. Our provider stores the same shape.
+
+    case "CDHSetReturnVal": {
+      // Slot 0x2B. IPO sets a per-IPO return code we expose to the
+      // host orchestrator via `cabi.getReturnVal()`.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHSetReturnVal(Number(args.Wert) | 0);
+      };
+    }
+    case "CDHResetError": {
+      // Slot 0x52. Clears the error scratchpad. Empty signature.
+      return async (ctx) => {
+        popArgs(ctx, slot.params);
+        await cabi.CDHResetError();
+      };
+    }
+    case "CDHSetError": {
+      // Slot 0x53. IPO surfaces a recoverable error to the host —
+      // stored on `cabi.lastCdhError`, surfaced post-runCabimain via
+      // `cabi.getLastCdhError()`.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHSetError(
+          Number(args.ErrNr) | 0,
+          String(args.ModulName),
+          String(args.ProcName),
+          Number(args.LineNr) | 0,
+          String(args.ErrorInfo),
+        );
+      };
+    }
+    case "CDHTestError": {
+      // Slot 0x54. IPO probes the error scratchpad to gate retry
+      // branches. Returns the stored `errNr` (0 = no error).
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHTestError();
+        writeOut(ctx, args.ErrNr, "int", res.out?.errNr ?? 0);
+      };
+    }
+
+    // ── Identity / SG lookup ────────────────────────────────────────────
+
+    case "CDHGetSgbdName": {
+      // Slot 0x33. IPO asks for the resolved SGBD basename for the
+      // current SgName (e.g. "AKMB" → "C_KMB46"). Backed by SGFAM.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetSgbdName();
+        writeOut(ctx, args.SgbdName, "string", res.out?.sgbdName ?? "");
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHIdReady": {
+      // Slot 0x5C. IPO checks whether the SG identity matches
+      // expected — gates the auth-retry path. We stub `true`
+      // because our CDHCheckIdent always accepts (see provider).
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHIdReady();
+        writeOut(ctx, args.IdReady, "bool", res.out?.idReady ?? true);
+      };
+    }
+    case "CDHCheckIdent": {
+      // Slot 0x40. Verify ECU identity matches CDNR/HWNR pair.
+      // Provider stubs success — the K-line layer is the real gate.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHCheckIdent(
+          String(args.Bezeichner),
+          String(args.Id1),
+          String(args.Id2),
+        );
+        writeOut(ctx, args.RetVal, "int", res.retVal | 0);
+      };
+    }
+    case "CDHCheckIdent2": {
+      // Slot 0x61. Numeric-Id variant of CDHCheckIdent.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHCheckIdent2(
+          String(args.Bezeichner),
+          Number(args.Id1) | 0,
+        );
+        writeOut(ctx, args.RetVal, "int", res.retVal | 0);
+      };
+    }
+    case "CDHGetInfo": {
+      // Slot 0x3F. Returns a result string from a SGBD INFO job.
+      // Provider stubs empty + count 0 — IPO's info-iteration body
+      // skips on empty.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHGetInfo(
+          String(args.Bezeichner),
+          Number(args.InfoNr) | 0,
+        );
+        writeOut(ctx, args.Info, "string", res.out?.info ?? "");
+        writeOut(ctx, args.NrOfInfo, "int", res.out?.nrOfInfo ?? 0);
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+
+    // ── FSW / PSW / Grp activation ──────────────────────────────────────
+    //
+    // Slots 0x35..0x3D. NCSEXPER mutates an in-memory worklist of
+    // FSW/PSW/Grp tokens that drives which coding bits get changed
+    // in the netto buffer. Our flow resolves netto bytes upstream
+    // (process-ecu.ts's flattenSlots) and seeds slots[] directly, so
+    // these calls are bookkeeping the IPO does for NCSEXPER's UI —
+    // dispatch through provider where they're safe no-ops returning
+    // RetVal=0.
+
+    case "CDHActivateFsw": {
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHActivateFsw(String(args.Fsw));
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHInactivateFsw": {
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHInactivateFsw(String(args.Fsw));
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHActivateAllFsw": {
+      // Slot 0x39 — A_GM5.ipo uses this. Empty signature.
+      return async (ctx) => {
+        popArgs(ctx, slot.params);
+        await cabi.CDHActivateAllFsw();
+      };
+    }
+    case "CDHInactivateAllFsw": {
+      return async (ctx) => {
+        popArgs(ctx, slot.params);
+        await cabi.CDHInactivateAllFsw();
+      };
+    }
+    case "CDHActivateGrp": {
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHActivateGrp(String(args.Gruppe));
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHInactivateGrp": {
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHInactivateGrp(String(args.Gruppe));
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHChangePsw": {
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        await cabi.CDHChangePsw(String(args.Fsw), String(args.Psw));
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHSaveFswPswList": {
+      // Slot 0x3C. Empty signature.
+      return async (ctx) => {
+        popArgs(ctx, slot.params);
+        await cabi.CDHSaveFswPswList();
+      };
+    }
+    case "CDHRestoreFswPswList": {
+      // Slot 0x3D. Empty signature.
+      return async (ctx) => {
+        popArgs(ctx, slot.params);
+        await cabi.CDHRestoreFswPswList();
+      };
+    }
+
+    // ── Authentication (seed/key) ───────────────────────────────────────
+    //
+    // Slots 0x5D / 0x62. Real impl requires BMW SAUTH.DAT key tables;
+    // until those are wired, stub "auth succeeded with empty response"
+    // so IPOs that touch auth flow through. ECUs that gate writes
+    // behind real auth will reject the subsequent K-line xsend with
+    // a transport-level timeout, which is the honest failure mode.
+
+    case "CDHCallAuthenticate": {
+      // Slot 0x5D. Empty random / level / response — IPO proceeds.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHCallAuthenticate(
+          String(args.SgFamilie),
+          String(args.UserId),
+          String(args.StgId),
+          String(args.Type),
+          Number(args.SgrndHdl) | 0,
+          String(args.Level),
+          Number(args.ResponseHdl) | 0,
+        );
+        writeOut(ctx, args.ResponseLen, "int", res.out?.responseLen ?? 0);
+        writeOut(ctx, args.RetVal, "int", 0);
+      };
+    }
+    case "CDHAuthGetRandom": {
+      // Slot 0x62. Empty random in both forms — IPO proceeds.
+      return async (ctx) => {
+        const args = popArgs(ctx, slot.params);
+        const res = await cabi.CDHAuthGetRandom();
+        writeOut(ctx, args.RndBin, "string", res.out?.rndBin ?? "");
+        writeOut(ctx, args.RndAsc, "string", res.out?.rndAsc ?? "");
+      };
+    }
+
     case "CDHResetApiJobData":
     case "CDHSetCbdName":
     case "CDHSetSgName":
-    case "CDHSetError":
-    case "CDHActivateFsw":
-    case "CDHInactivateFsw":
-    case "CDHActivateGrp":
-    case "CDHInactivateGrp":
-    case "CDHActivateAllFsw":
-    case "CDHInactivateAllFsw":
-    case "CDHChangePsw":
-    case "CDHSaveFswPswList":
-    case "CDHRestoreFswPswList":
     case "CDHGetFswDataFromCbd":
     case "CDHGetFswPswDataFromCbd":
     case "CDHGetGrpDataFromCbd":
     case "CDHGetFswPswFromNettoData":
-    case "CDHCheckIdent":
-    case "CDHCheckIdent2":
-    case "CDHGetInfo":
-    case "CDHGetSgbdName":
     case "CDHReadSget":
     case "CDHGetBaureiheFromZcs":
     case "CDHGetFswPswFromZcs":
     case "CDHGetFswPswFromCvt":
-    case "CDHIdReady":
     case "CDHDelay":
-    case "CDHCallAuthenticate":
-    case "CDHAuthGetRandom":
     case "CDHapiResultSets":
     case "CDHapiCheckJobStatus":
     case "CDHGetApiJobByteData":

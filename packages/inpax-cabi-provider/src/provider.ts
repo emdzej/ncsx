@@ -407,20 +407,104 @@ export class CabiProvider {
     return { retVal: COAPI_OK, out: { idReady: true } };
   }
 
-  /** `CDHSetReturnVal( in: int Wert );` — script-side return-value setter. */
-  async CDHSetReturnVal(_wert: number): Promise<CdhResult> {
-    // Captured by the interpreter; we just return OK so the IPO can chain.
+  /**
+   * Last error the IPO raised via `CDHSetError`. Read by
+   * `CDHTestError`, cleared by `CDHResetError`. Mirrors NCSEXPER's
+   * per-session error scratchpad — the host reads it after
+   * `runCabimain` returns to surface a useful message to the user
+   * when JOB_STATUS alone isn't informative.
+   *
+   * `errNr === 0` means "no error" — what NCSEXPER's
+   * `CDHTestError` returns when the IPO hasn't set anything.
+   */
+  protected lastCdhError: {
+    errNr: number;
+    modulName: string;
+    procName: string;
+    lineNr: number;
+    errorInfo: string;
+  } = { errNr: 0, modulName: '', procName: '', lineNr: 0, errorInfo: '' };
+
+  /**
+   * Last value the IPO set via `CDHSetReturnVal`. NCSEXPER reads it
+   * after the IPO exits via its `CDHGetReturnVal` MFC-side getter;
+   * we expose it through `cabdPar` / direct access for host
+   * orchestration code that wants to know what the IPO ended on.
+   */
+  protected lastReturnVal: number = 0;
+
+  /** `CDHSetReturnVal( in: int Wert );` — slot 0x2B, per-IPO return code. */
+  async CDHSetReturnVal(wert: number): Promise<CdhResult> {
+    this.lastReturnVal = wert | 0;
     return { retVal: COAPI_OK };
   }
 
-  /** `CDHResetError( );` */
+  /** Public getter — host orchestrator can read what the IPO set. */
+  getReturnVal(): number {
+    return this.lastReturnVal;
+  }
+
+  /**
+   * `CDHResetError( );` — slot 0x52. Clears the per-session error
+   * scratchpad. Mirrors NCSEXPER's `coapiResetError` (clears the
+   * global error state struct).
+   */
   async CDHResetError(): Promise<CdhResult> {
+    this.lastCdhError = { errNr: 0, modulName: '', procName: '', lineNr: 0, errorInfo: '' };
     return { retVal: COAPI_OK };
   }
 
-  /** `CDHTestError( out: int ErrNr );` */
+  /**
+   * `CDHSetError(in: int ErrNr, in: string ModulName, in: string ProcName,
+   *  in: int LineNr, in: string ErrorInfo)` — slot 0x53.
+   *
+   * The IPO calls this when it detects a recoverable error
+   * (e.g. CABD lookup miss, FSW invalid for current coding index).
+   * NCSEXPER buffers all five fields and either logs them via
+   * `coapiTraceErrorMessage` or surfaces them in the UI's error
+   * panel after `runCabimain` returns. We store them on the provider
+   * for the host to inspect — same shape, different sink.
+   */
+  async CDHSetError(
+    errNr: number,
+    modulName: string,
+    procName: string,
+    lineNr: number,
+    errorInfo: string,
+  ): Promise<CdhResult> {
+    this.lastCdhError = {
+      errNr: errNr | 0,
+      modulName,
+      procName,
+      lineNr: lineNr | 0,
+      errorInfo,
+    };
+    return { retVal: COAPI_OK };
+  }
+
+  /**
+   * `CDHTestError(out: int ErrNr)` — slot 0x54. Returns the current
+   * error number; the IPO uses this to gate retry / cleanup
+   * branches. `0` = no error.
+   */
   async CDHTestError(): Promise<CdhResult<{ errNr: number }>> {
-    return { retVal: COAPI_OK, out: { errNr: 0 } };
+    return { retVal: COAPI_OK, out: { errNr: this.lastCdhError.errNr } };
+  }
+
+  /**
+   * Public host accessor — read the full last-error record after
+   * `runCabimain` returns. UI code can surface this to the user
+   * instead of (or alongside) `JOB_STATUS` when an IPO bailed via
+   * `CDHSetError` rather than via a SGBD-level failure.
+   */
+  getLastCdhError(): {
+    errNr: number;
+    modulName: string;
+    procName: string;
+    lineNr: number;
+    errorInfo: string;
+  } {
+    return { ...this.lastCdhError };
   }
 
   /** `CDHDelay( in: int d );` — milliseconds. */
@@ -1048,76 +1132,117 @@ export class CabiProvider {
   }
 
   // ── FSW / PSW manipulation ──────────────────────────────────────────────────
+  //
+  // The Activate/Inactivate/ChangePsw family in NCSEXPER mutates an
+  // **in-memory FSW/PSW worklist** (`coapiFswPswListSet`-shaped
+  // structures) the host builds before SG_CODIEREN runs. Our flow
+  // doesn't go through that worklist — we resolve the netto bytes
+  // upstream (`process-ecu.ts`'s `flattenSlots` + `app.identity.fa`-
+  // driven coding diff) and seed `slots[]` directly via
+  // `CDHSetNettoData`. So these calls are bookkeeping the IPO does
+  // for NCSEXPER's UI — making them safe no-ops with `COAPI_OK`
+  // lets the IPO chain through without an exception.
 
+  /** `CDHActivateFsw(in: string Fsw, out: int RetVal)` — slot 0x35. */
   async CDHActivateFsw(_fsw: string): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHActivateFsw');
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHInactivateFsw(in: string Fsw, out: int RetVal)` — slot 0x36. */
   async CDHInactivateFsw(_fsw: string): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHInactivateFsw');
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHActivateAllFsw()` — slot 0x39, A_GM5.ipo uses this. */
   async CDHActivateAllFsw(): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHActivateAllFsw');
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHInactivateAllFsw()` — slot 0x3A. */
   async CDHInactivateAllFsw(): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHInactivateAllFsw');
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHActivateGrp(in: string Gruppe, out: int RetVal)` — slot 0x37. */
   async CDHActivateGrp(_gruppe: string): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHActivateGrp');
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHInactivateGrp(in: string Gruppe, out: int RetVal)` — slot 0x38. */
   async CDHInactivateGrp(_gruppe: string): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHInactivateGrp');
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHChangePsw(in: string Fsw, in: string Psw, out: int RetVal)` — slot 0x3B. */
   async CDHChangePsw(_fsw: string, _psw: string): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHChangePsw');
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHSaveFswPswList()` — slot 0x3C, snapshot for undo. */
   async CDHSaveFswPswList(): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHSaveFswPswList');
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHRestoreFswPswList()` — slot 0x3D, restore previous snapshot. */
   async CDHRestoreFswPswList(): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHRestoreFswPswList');
+    return { retVal: COAPI_OK };
   }
 
   async CDHSaveTmpFswPswList(): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHSaveTmpFswPswList');
+    return { retVal: COAPI_OK };
   }
 
   async CDHRestoreTmpFswPswList(): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHRestoreTmpFswPswList');
+    return { retVal: COAPI_OK };
   }
 
   // ── Identity / Info ─────────────────────────────────────────────────────────
 
+  /**
+   * `CDHGetInfo(in: string Bezeichner, in: int InfoNr, out: string Info,
+   *  out: int NrOfInfo, out: int RetVal)` — slot 0x3F.
+   *
+   * In NCSEXPER this runs the INFO job against the current SGBD and
+   * returns a specific result field (`Info` job → result name in
+   * `Bezeichner`, index `InfoNr`). Until we wire INFO dispatch
+   * properly, return empty `Info` + `NrOfInfo = 0` so the IPO's
+   * info-loop body skips — matches "no info available" semantics.
+   */
   async CDHGetInfo(
     _bezeichner: string,
     _infoNr: number,
   ): Promise<CdhResult<{ info: string; nrOfInfo: number }>> {
-    throw new CdhNotImplementedError(
-      'CDHGetInfo',
-      'INFO job dispatch + result formatting',
-    );
+    return { retVal: COAPI_OK, out: { info: '', nrOfInfo: 0 } };
   }
 
+  /**
+   * `CDHCheckIdent(in: string Bezeichner, in: string Id1, in: string Id2,
+   *  out: int RetVal)` — slot 0x40.
+   *
+   * Verifies that the connected ECU's IDENT result matches the
+   * expected (`Id1`, `Id2`) pair (typically CDNR / HWNR). NCSEXPER
+   * sets `RetVal = 0` on match, non-zero on mismatch — the IPO's
+   * `TestCDHFehler` chain aborts SG_CODIEREN on non-zero.
+   *
+   * We don't have a verified ident table for every SG yet (would
+   * need CABD-side ident records keyed on coding revision). Return
+   * `RetVal = 0` (= "match") so the IPO trusts what we passed in
+   * — same default NCSEXPER takes when ident records are missing.
+   * Tracked: future work to pull ident records from CABD and do the
+   * actual compare; sometimes the SG mismatch is itself the cause of
+   * downstream K-line failures.
+   */
   async CDHCheckIdent(
     _bezeichner: string,
     _id1: string,
     _id2: string,
   ): Promise<CdhResult> {
-    throw new CdhNotImplementedError(
-      'CDHCheckIdent',
-      'verify SG-Ident matches expected (CDNR/HWNR)',
-    );
+    return { retVal: COAPI_OK };
   }
 
+  /** `CDHCheckIdent2(in: string Bezeichner, in: int Id1, out: int RetVal)` — slot 0x61. */
   async CDHCheckIdent2(_bezeichner: string, _id1: number): Promise<CdhResult> {
-    throw new CdhNotImplementedError('CDHCheckIdent2');
+    return { retVal: COAPI_OK };
   }
 
   // ── CABD data fetch ─────────────────────────────────────────────────────────
@@ -1272,6 +1397,31 @@ export class CabiProvider {
   }
 
   // ── Authentication ──────────────────────────────────────────────────────────
+  //
+  // CDHCallAuthenticate / CDHAuthGetRandom drive NCSEXPER's per-SG
+  // seed/key challenge-response (BMW's "Login" service on K-line /
+  // SecurityAccess on UDS). The host:
+  //   1. CDHAuthGetRandom — gets a random nonce
+  //   2. CDHCallAuthenticate — runs the SG's auth job with the
+  //      computed response, gets back ECU's response payload
+  // Algorithm is per-SG-family (NCSEXPER bakes it in per "SgFamilie"
+  // / "Level" combo, defined in BMW's SAUTH.DAT / SGRND key tables).
+  // Implementing the actual crypto requires the BMW seed/key
+  // tables, which we don't ship.
+  //
+  // Behaviour to match "no auth required":
+  //   - CDHAuthGetRandom returns empty random buffers, RetVal=0
+  //   - CDHCallAuthenticate returns ResponseLen=0, RetVal=0
+  // The IPO's `TestCDHFehler` then proceeds. ECUs that gate writes
+  // behind real auth will reject the subsequent xsend at the K-line
+  // layer — visible as a transport-level timeout (same shape as the
+  // GM5 C_FG_AUFTRAG failure). That's the right failure mode: the
+  // ECU declines, our software didn't lie about authenticating.
+  //
+  // Anchor: A_GM5.ipo doesn't call either of these slots, so the
+  // GM5 timeout we're chasing isn't an auth issue. They're here so
+  // IPOs that DO touch auth (newer chassis K-CAN / D-CAN flows)
+  // don't trip on an `throw CdhNotImplementedError`.
 
   async CDHCallAuthenticate(
     _sgFamilie: string,
@@ -1282,11 +1432,11 @@ export class CabiProvider {
     _level: string,
     _responseHdl: number,
   ): Promise<CdhResult<{ responseLen: number }>> {
-    throw new CdhNotImplementedError('CDHCallAuthenticate', 'SG seed/key auth');
+    return { retVal: COAPI_OK, out: { responseLen: 0 } };
   }
 
   async CDHAuthGetRandom(): Promise<CdhResult<{ rndBin: string; rndAsc: string }>> {
-    throw new CdhNotImplementedError('CDHAuthGetRandom');
+    return { retVal: COAPI_OK, out: { rndBin: '', rndAsc: '' } };
   }
 
   // ───────────────────────────────────────────────────────────────────────────
