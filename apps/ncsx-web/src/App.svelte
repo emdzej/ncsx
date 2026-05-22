@@ -12,6 +12,7 @@
   import IdentityPanel from "./components/IdentityPanel.svelte";
   import FaEditorDialog from "./components/FaEditorDialog.svelte";
   import ZcsEditorDialog from "./components/ZcsEditorDialog.svelte";
+  import AboutDialog from "./components/AboutDialog.svelte";
 
   // Load the community-maintained translation dictionary on app boot. Vite serves
   // `/translations.csv` from `apps/ncsx-web/public/`. The CSV is ~1 MB but parses in
@@ -49,18 +50,17 @@
         NCSX
       </button>
       <!-- Build version surfaced from package.json via Vite `define`.
-           Linked to the matching git tag so users can pop the
-           changelog in one click. Faint styling keeps it as metadata,
-           not chrome. Mirrors the inpax-web pattern. -->
-      <a
-        href="https://github.com/emdzej/ncsx/releases/tag/{__APP_VERSION__}"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="text-xs text-faint transition hover:text-foreground"
-        title="View release notes on GitHub"
+           Clicking opens the About dialog, which surfaces ncsx /
+           ediabasx / inpax versions (each linked to their release tag)
+           and a "Report an issue" link. Faint styling keeps it as
+           metadata, not chrome. -->
+      <button
+        class="text-xs text-faint underline-offset-2 transition hover:text-foreground hover:underline"
+        onclick={() => (app.showAbout = true)}
+        title="About NCSX — versions, source, report an issue"
       >
         {__APP_VERSION__}
-      </a>
+      </button>
       <!-- GitHub repo link. The 16×16 mark is GitHub's official
            public-domain octocat SVG (https://github.com/logos); we
            inline rather than reference an asset so the icon is
@@ -127,4 +127,5 @@
   <SettingsDialog />
   <FaEditorDialog />
   <ZcsEditorDialog />
+  <AboutDialog />
 </div>

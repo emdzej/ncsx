@@ -9,11 +9,24 @@ import { VitePWA } from "vite-plugin-pwa";
 // the string literal (e.g. "0.0.1"). The dev server picks up changes on Vite restart.
 const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
-) as { version: string };
+) as { version: string; dependencies?: Record<string, string> };
+
+// Strip the leading `^` / `~` from a semver range so the About dialog shows a clean
+// `0.2.7` instead of `^0.2.7`. Falls back to the raw string if the leading char isn't
+// a known range marker.
+function cleanSemver(range: string | undefined): string {
+  if (!range) return "(unknown)";
+  return range.replace(/^[\^~]/, "");
+}
+
+const ediabasxVersion = cleanSemver(pkg.dependencies?.["@emdzej/ediabasx-ediabas"]);
+const inpaxVersion = cleanSemver(pkg.dependencies?.["@emdzej/inpax-interpreter"]);
 
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __EDIABASX_VERSION__: JSON.stringify(ediabasxVersion),
+    __INPAX_VERSION__: JSON.stringify(inpaxVersion),
   },
   plugins: [
     svelte(),

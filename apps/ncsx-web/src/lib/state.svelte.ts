@@ -95,6 +95,8 @@ interface AppState {
   showFaEditor: boolean;
   /** Whether the ZCS edit dialog is open. */
   showZcsEditor: boolean;
+  /** Whether the About dialog is open. */
+  showAbout: boolean;
   install: NcsxInstall | null;
   chassis: Chassis | null;
   /** Display label of the currently-viewed module (formatted as `KMB_E46.C06`). */
@@ -149,6 +151,7 @@ export const app: AppState = $state({
   showSettings: false,
   showFaEditor: false,
   showZcsEditor: false,
+  showAbout: false,
   install: null,
   chassis: null,
   selectedSg: null,
