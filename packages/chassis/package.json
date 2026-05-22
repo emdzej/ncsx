@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-chassis",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Chassis bundle loader — BR_REF aliasing + DST/SGET/SGVT/ZCSUT/CVT + SGFAM/ZST/AT, lazy CABD on demand.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-function-list",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Typed module catalog — walk a SG's CABD .Cxx DATEN file and emit a FunctionList (Function / Property / Unoccupied / Group items). Mirrors NCSDummy's Classes/Functions/FunctionListReader. Spec: ../../docs/ncsdummy-analysis.md §3.1.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

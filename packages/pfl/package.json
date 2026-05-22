@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-pfl",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Parser/serializer for NCSEXPER .pfl profile files. Spec: ../../docs/pfl-format.md",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
