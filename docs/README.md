@@ -16,7 +16,8 @@ Reverse-engineering notes for BMW's **NCS Expertentool** (NCSEXPER 4.0.1, 2013) 
 9. **[`cabi-binding-plan.md`](cabi-binding-plan.md)** — per-function plan for porting the 97 `CABI.H` externs to a `@emdzej/inpax-cabi-provider` system-function table for Phase 9 (Kernfunktionen runner).
 10. **[`ncsdummy-analysis.md`](ncsdummy-analysis.md)** — NCS Dummy parity analysis + the new `function-list`, `options`, `trace`, `translations`, `property-formulas` package design.
 11. **[`user-flow.md`](user-flow.md)** — end-user flow design for the `apps/web` browser SPA, including the phase plan.
-12. **[`POC-DELTAS.md`](POC-DELTAS.md)** — concrete patch list against the existing `bimmerz/packages/ncs-data` TypeScript POC, mapped to line numbers + spec sections.
+12. **[`patches.md`](patches.md)** — `.ncsxpatch.yaml` shareable-coding-patches format: schema, compatibility model, UI flow.
+13. **[`POC-DELTAS.md`](POC-DELTAS.md)** — concrete patch list against the existing `bimmerz/packages/ncs-data` TypeScript POC, mapped to line numbers + spec sections.
 
 ## Status
 

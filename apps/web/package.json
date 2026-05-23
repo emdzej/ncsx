@@ -33,6 +33,7 @@
     "@emdzej/ncsx-identity": "workspace:*",
     "@emdzej/ncsx-inpax-cabi-provider": "workspace:*",
     "@emdzej/ncsx-options": "workspace:*",
+    "@emdzej/ncsx-patches": "workspace:*",
     "@emdzej/ncsx-pfl": "workspace:*",
     "@emdzej/ncsx-predicate": "workspace:*",
     "@emdzej/ncsx-text-tables": "workspace:*",

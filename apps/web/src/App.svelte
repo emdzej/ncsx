@@ -12,6 +12,7 @@
   import IdentityPanel from "./components/IdentityPanel.svelte";
   import FaEditorDialog from "./components/FaEditorDialog.svelte";
   import ZcsEditorDialog from "./components/ZcsEditorDialog.svelte";
+  import PatchDialog from "./components/PatchDialog.svelte";
   import AboutDialog from "./components/AboutDialog.svelte";
 
   // Load the community-maintained translation dictionary on app boot. Vite serves
@@ -127,5 +128,6 @@
   <SettingsDialog />
   <FaEditorDialog />
   <ZcsEditorDialog />
+  <PatchDialog />
   <AboutDialog />
 </div>

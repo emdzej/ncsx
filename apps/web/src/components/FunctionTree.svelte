@@ -21,6 +21,8 @@
   } from "../lib/process-ecu";
   import { onMount } from "svelte";
   import { downloadFswPsw, downloadNettodatTrc, parseFswPswMan } from "../lib/fsw-psw-trc";
+  import { openPatchDialog } from "../lib/patch-dialog.svelte";
+  import { parsePatch, PatchSchemaError } from "@emdzej/ncsx-patches";
 
   let filter = $state("");
   let reading = $state(false);
@@ -269,6 +271,76 @@
     } catch (err) {
       app.error = err instanceof Error ? err.message : String(err);
     }
+  }
+
+  /**
+   * Hidden file inputs for the patch flows. Two of them because
+   * "append to patch" and "apply patch" both pick a file but feed
+   * different handlers — sharing one input would mean re-binding
+   * `onchange` per click, which is more state to track than two
+   * dedicated refs.
+   */
+  let appendPatchInput = $state<HTMLInputElement | null>(null);
+  let applyPatchInput = $state<HTMLInputElement | null>(null);
+
+  function onPickAppendPatch(ev: Event): void {
+    const input = ev.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    void (async () => {
+      try {
+        const text = await file.text();
+        const patch = parsePatch(text);
+        openPatchDialog("append", {
+          currentTargets: targets,
+          loadedPatch: patch,
+          loadedFilename: file.name,
+        });
+      } catch (err) {
+        app.error =
+          err instanceof PatchSchemaError
+            ? `${file.name}: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err);
+      }
+    })();
+  }
+
+  function onPickApplyPatch(ev: Event): void {
+    const input = ev.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    void (async () => {
+      try {
+        const text = await file.text();
+        const patch = parsePatch(text);
+        openPatchDialog("apply", {
+          currentTargets: targets,
+          loadedPatch: patch,
+          loadedFilename: file.name,
+          onApplied: (resolved) => {
+            // Overlay resolved edits on top of any already-staged ones.
+            // Same semantics as Import FSW_PSW.MAN.
+            targets = { ...targets, ...resolved };
+            const count = Object.keys(resolved).length;
+            flashReadStatus(
+              "read",
+              `Applied ${count} edit${count === 1 ? "" : "s"} from ${file.name}`,
+            );
+          },
+        });
+      } catch (err) {
+        app.error =
+          err instanceof PatchSchemaError
+            ? `${file.name}: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err);
+      }
+    })();
   }
 
   function back(): void {
@@ -907,6 +979,52 @@
         : "Load a module first"}
     >
       Import FSW_PSW.MAN
+    </button>
+    <span class="mx-1 h-5 w-px bg-divider" aria-hidden="true"></span>
+    <button
+      class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={() =>
+        openPatchDialog("save", { currentTargets: targets })}
+      disabled={!app.functionList || pendingEdits.length === 0 || !app.selectedModule}
+      title={pendingEdits.length > 0
+        ? "Save staged edits as a shareable .ncsxpatch.yaml — YAML envelope around the same FSW/PSW pairs as MAN, plus metadata (title, description, author, keywords) and optional pinning to the current coding index."
+        : "Stage at least one PSW edit first"}
+    >
+      Save as patch…
+    </button>
+    <input
+      type="file"
+      accept=".yaml,.yml,.ncsxpatch"
+      class="hidden"
+      bind:this={appendPatchInput}
+      onchange={onPickAppendPatch}
+    />
+    <button
+      class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={() => appendPatchInput?.click()}
+      disabled={!app.functionList || pendingEdits.length === 0 || !app.selectedModule}
+      title={pendingEdits.length > 0
+        ? "Append staged edits to an existing .ncsxpatch.yaml — pick a patch file, optionally pick merge-vs-replace if it already covers this module, then download the combined patch."
+        : "Stage at least one PSW edit first"}
+    >
+      Append to patch…
+    </button>
+    <input
+      type="file"
+      accept=".yaml,.yml,.ncsxpatch"
+      class="hidden"
+      bind:this={applyPatchInput}
+      onchange={onPickApplyPatch}
+    />
+    <button
+      class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+      onclick={() => applyPatchInput?.click()}
+      disabled={!app.functionList || !app.selectedModule}
+      title={app.functionList && app.selectedModule
+        ? "Apply a .ncsxpatch.yaml — pick a patch file and stage every edit that matches the current module. Reviews warnings (chassis/CI mismatch, unknown PSWs) before committing."
+        : "Load a module first"}
+    >
+      Apply patch…
     </button>
     <!--
       Run-job dropdown gets its own row — `basis-full` in a
