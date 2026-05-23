@@ -32,7 +32,7 @@ that matters.
 Both flows now route through the IPO instead:
 
 - **Read** — `processReadCoding` in
-  `apps/ncsx-web/src/lib/process-ecu.ts` → `cabimain("CODIERDATEN_LESEN")`.
+  `apps/web/src/lib/process-ecu.ts` → `cabimain("CODIERDATEN_LESEN")`.
 - **Write** — `processWriteCoding` in the same file →
   `cabimain("SG_CODIEREN")`.
 

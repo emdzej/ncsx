@@ -72,9 +72,9 @@ export type { IdentityReadResult };
 
 ## Consumers
 
-- `apps/ncsx-web/src/components/IdentityPanel.svelte` — drives the identity card
+- `apps/web/src/components/IdentityPanel.svelte` — drives the identity card
   in the UI.
-- `apps/ncsx-web/src/lib/process-ecu.ts` — `processWriteCoding` calls
+- `apps/web/src/lib/process-ecu.ts` — `processWriteCoding` calls
   `formatFahrgestellNr(app.identity.vin)` and seeds it as `FAHRGESTELL_NR` via
   `CDHSetSystemData` so `SG_CODIEREN`'s post-write `C_FG_AUFTRAG` has the right
   18-byte chassis number to thread into the SGBD.

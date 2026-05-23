@@ -134,7 +134,7 @@ B <addr_8>,<count_4>,<word_4>,<word_4>,...\r\n
 
 Verification: in a real NCSEXPERT E46 KMB dump, lines `B 00000038,0008,89DB,...` and `B 00000040,0008,1330,...` are strictly contiguous (cover word ranges `0x38..0x3F` and `0x40..0x47` = byte ranges `0x70..0x7F` and `0x80..0x8F`). The same data interpreted as byte addresses would overlap at `0x40..0x47`, which can't happen in a single read pass — confirming word addressing.
 
-ncsx's `buildNettodatTrc` (`apps/ncsx-web/src/lib/fsw-psw-trc.ts`) writes **byte addresses** instead, because our netto buffer is a byte-indexed `Uint8Array` and emitting word addresses would force every consumer to do a unit conversion. The byte values within each word are MSB-first in both writers, matching the ECU's on-the-wire representation.
+ncsx's `buildNettodatTrc` (`apps/web/src/lib/fsw-psw-trc.ts`) writes **byte addresses** instead, because our netto buffer is a byte-indexed `Uint8Array` and emitting word addresses would force every consumer to do a unit conversion. The byte values within each word are MSB-first in both writers, matching the ECU's on-the-wire representation.
 
 When diffing our NETTODAT export against an NCSEXPERT reference for a word-mode chassis:
 

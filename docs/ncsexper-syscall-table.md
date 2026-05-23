@@ -135,7 +135,7 @@ exclusively; slot `0x18` (`apiJob`) is the raw bypass.
 
 ### Plug it into the runtime
 
-`apps/ncsx-web/src/lib/runtime.svelte.ts` currently registers a no-op
+`apps/web/src/lib/runtime.svelte.ts` currently registers a no-op
 override for every slot in `0x00..0x60` and only handles slot `0x0D`
 specifically. With the full table in hand, replace that with proper
 per-slot dispatchers:

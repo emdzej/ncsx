@@ -264,7 +264,7 @@ Verbatim port of `CalcMod36CheckSum` (`FUN_0043e9d0`) and
 `coapiSetFgNr` (`FUN_0042a560`)'s 17-char branch. Locked by unit tests
 that include the worked example above (`mod36Checksum("FPWBAAA00000PM10277") === "L"`).
 
-### Seed call (`apps/ncsx-web/src/lib/process-ecu.ts`)
+### Seed call (`apps/web/src/lib/process-ecu.ts`)
 
 ```ts
 import { formatFahrgestellNr } from "@emdzej/ncsx-identity";
@@ -297,7 +297,7 @@ seeded format.
 - Other host-seeded system-data keys we'll probably surface as more
   IPOs run end-to-end: `BAUREIHE`, `TYP_SCHLUESSEL`, `LACK_CODE`,
   `POLSTERCODE`, etc. Same `CDHSetSystemData` slot — the dispatcher
-  is already wired (see `apps/ncsx-web/src/lib/cabi-syscall-overrides.ts`),
+  is already wired (see `apps/web/src/lib/cabi-syscall-overrides.ts`),
   just need to plumb the values from `app.identity`.
 - If an SGBD ever validates the supplied check char against its own
   re-computation (which `coapiSetFgNr`'s 18-char branch does on host

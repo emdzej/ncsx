@@ -210,7 +210,7 @@ ncsx mirrors both. The whole app is client-side:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Browser tab (apps/ncsx-web)                                  │
+│  Browser tab (apps/web)                                  │
 │                                                                │
 │  Svelte 5 (runes) + TypeScript + Vite + Tailwind + vite-pwa   │
 │                                                                │
@@ -278,7 +278,7 @@ dev; TLS required for any other host (Web Serial is secure-context-gated).
 
 ### 5.3 Deployment
 
-Static SPA — `apps/ncsx-web/dist/` deploys to any static host. Reuse the ediabasx-web nginx
+Static SPA — `apps/web/dist/` deploys to any static host. Reuse the ediabasx-web nginx
 Dockerfile pattern (multi-stage, immutable cache headers on `/assets/*`, SPA fallback). PWA
 manifest so the app is installable.
 
@@ -291,7 +291,7 @@ manifest so the app is installable.
 | 1     | `packages/function-list` (Phase A from analysis doc)                        | Module catalog parses from DATEN — pure logic, testable  |
 | 2     | `packages/options` (Phase C)                                                | FSWs/PSWs carry FA-predicate metadata                    |
 | 3     | `packages/trace` reader+writer (Phase B)                                    | Can open/save TRC/MAN as plain unit tests                |
-| 4     | `apps/ncsx-web` skeleton (Svelte + Vite, picks DATEN folder, renders tree)  | Offline editor in the browser, no car needed             |
+| 4     | `apps/web` skeleton (Svelte + Vite, picks DATEN folder, renders tree)  | Offline editor in the browser, no car needed             |
 | 5     | OPFS catalog cache + draft-overlay persistence                              | Snappy reloads; drafts survive tab close                 |
 | 6     | `packages/wire` (`@emdzej/ediabasx` + `WebSerialTransport`)                 | "Open module" reads real bytes from the ECU              |
 | 7     | `Apply to ECU` button (calls `coder` + `wire.writeNetto`)                   | End-to-end coding                                        |

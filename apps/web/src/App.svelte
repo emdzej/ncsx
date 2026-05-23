@@ -15,7 +15,7 @@
   import AboutDialog from "./components/AboutDialog.svelte";
 
   // Load the community-maintained translation dictionary on app boot. Vite serves
-  // `/translations.csv` from `apps/ncsx-web/public/`. The CSV is ~1 MB but parses in
+  // `/translations.csv` from `apps/web/public/`. The CSV is ~1 MB but parses in
   // ~30 ms in tests; we fire-and-forget so the install picker shows immediately.
   onMount(async () => {
     try {

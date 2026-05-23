@@ -49,7 +49,7 @@ jobs:
         run: pnpm build
 
       # pnpm `publish -r` walks the workspace, skips private packages
-      # (the monorepo root + `apps/ncsx-web` are `"private": true`), and
+      # (the monorepo root + `apps/web` are `"private": true`), and
       # forwards to `npm publish` per package. `--provenance` attaches a
       # verifiable build attestation — free when publishing via trusted
       # publishing.

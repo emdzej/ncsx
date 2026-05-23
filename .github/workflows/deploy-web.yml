@@ -51,13 +51,13 @@ jobs:
       # which repo to serve. The file is plain text, no trailing newline
       # needed.
       - name: Add CNAME
-        run: echo "ncsx.bimmerz.app" > apps/ncsx-web/dist/CNAME
+        run: echo "ncsx.bimmerz.app" > apps/web/dist/CNAME
 
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: apps/ncsx-web/dist
+          path: apps/web/dist
 
   deploy:
     needs: build

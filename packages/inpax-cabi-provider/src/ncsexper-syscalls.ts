@@ -11,7 +11,7 @@
  * This module exposes the raw metadata. The actual per-slot
  * `SystemFunctionOverride` factories — which pop args per the
  * signature and dispatch into `CabiProvider` — live with the runtime
- * consumer (`apps/ncsx-web/src/lib/runtime.svelte.ts`). Keeping the
+ * consumer (`apps/web/src/lib/runtime.svelte.ts`). Keeping the
  * factory out of this package lets us avoid taking
  * `@emdzej/inpax-interpreter` as a runtime dep.
  */

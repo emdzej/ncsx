@@ -46,7 +46,7 @@ const sets = cabi.lastJobSets;              // raw EDIABAS result sets
 const cabdPars = cabi.allCabdPars();        // every CDHSetCabdPar write
 ```
 
-`apps/ncsx-web/src/lib/runtime.svelte.ts` is the reference wiring — it builds the
+`apps/web/src/lib/runtime.svelte.ts` is the reference wiring — it builds the
 99-entry syscall slot table from `NCSEXPER_CABI_SLOTS` and dispatches each one
 into the right `CabiProvider` method.
 
@@ -102,8 +102,8 @@ export {
 
 ## Consumers
 
-- `apps/ncsx-web/src/lib/runtime.svelte.ts` — builds the system-function table
+- `apps/web/src/lib/runtime.svelte.ts` — builds the system-function table
   + drives `cabimain`.
-- `apps/ncsx-web/src/lib/process-ecu.ts` — the orchestrators
+- `apps/web/src/lib/process-ecu.ts` — the orchestrators
   (`processEcu` / `processReadCoding` / `processWriteCoding` / `processListJobs` /
   `processRunJob`).

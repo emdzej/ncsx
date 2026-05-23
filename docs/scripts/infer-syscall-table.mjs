@@ -15,7 +15,7 @@
 // hardcodes "cabimain"/"cabiexit" (ghidra-verified in CDHIntInit at
 // 0x004410f0 — no "inpainit" string exists in the binary).
 //
-// Run from apps/ncsx-web/ so node resolves @emdzej/inpax-parser:
+// Run from apps/web/ so node resolves @emdzej/inpax-parser:
 //   node ../../docs/scripts/infer-syscall-table.mjs /path/to/NCSEXPER/SGDAT
 
 import { readFileSync, readdirSync } from "node:fs";

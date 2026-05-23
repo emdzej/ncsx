@@ -84,8 +84,8 @@ by `@emdzej/ncsx-ecu-select`.
 
 In the browser we don't have `node:fs`; provide your own `ChassisSource` adapter backed by
 [`FileSystemDirectoryHandle`](https://developer.mozilla.org/docs/Web/API/FileSystemDirectoryHandle).
-The `apps/ncsx-web` app does this in
-[`src/lib/fs-chassis-source.ts`](../../apps/ncsx-web/src/lib/fs-chassis-source.ts) —
+The `apps/web` app does this in
+[`src/lib/fs-chassis-source.ts`](../../apps/web/src/lib/fs-chassis-source.ts) —
 ~80 lines, case-insensitive segment drill.
 
 ## `ChassisSource`

@@ -159,7 +159,7 @@ list from the IPO's `Jobs` function, not from `apiJobInfo` reflection.
   Downstream (PARZUWEISUNG_FSW conditional rows, ASW evaluation, SGAUSWAHL predicates)
   operates on FA exclusively.
 
-**Type model in ncsx** (`packages/identity` + `apps/ncsx-web/src/lib/state.svelte.ts`):
+**Type model in ncsx** (`packages/identity` + `apps/web/src/lib/state.svelte.ts`):
 
 ```ts
 interface VehicleIdentity {

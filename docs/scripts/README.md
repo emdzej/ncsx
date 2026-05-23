@@ -7,9 +7,9 @@ Tools for reverse-engineering NCSEXPER's bytecode runtime.
 `dump-ipo.mjs` — prints constants, function list, and typed disassembly
 of one (or all) functions in an IPO. Useful for spot-checking the
 per-CABD `A_*.ipo` dispatchers and the cabimain switch. Needs the
-inpax parser, run from `apps/ncsx-web/`:
+inpax parser, run from `apps/web/`:
 
-    cd apps/ncsx-web
+    cd apps/web
     node ../../docs/scripts/dump-ipo.mjs path/to/file.ipo [fnName] [fromPc] [toPc]
 
 `infer-syscall-table.mjs` — walks every `.ipo` file in a directory,
@@ -18,7 +18,7 @@ filters to CABI-style scripts (those with `cabimain`), records every
 slot → dominant `(ins, refs)` shape with sample counts. Used to
 cross-validate the runtime table.
 
-    cd apps/ncsx-web
+    cd apps/web
     node ../../docs/scripts/infer-syscall-table.mjs path/to/NCSEXPER/SGDAT
 
 `extract-ncsserv-keyword-table.mjs` — extracts the CABI syscall

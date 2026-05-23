@@ -168,7 +168,7 @@
            keywords (`KEYCARDREADER` → "Keycard reader") show in
            English alongside the raw BMW codes. The file is served
            from the app bundle at `/translations.csv` (sourced from
-           `apps/ncsx-web/public/translations.csv`). Surfacing this
+           `apps/web/public/translations.csv`). Surfacing this
            in the picker so users know (1) where the translations
            come from, (2) that nothing in their BMW install
            directory is consulted for translation — they're shipped

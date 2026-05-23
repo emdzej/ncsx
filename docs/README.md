@@ -15,7 +15,7 @@ Reverse-engineering notes for BMW's **NCS Expertentool** (NCSEXPER 4.0.1, 2013) 
 8. **[`ipo-usage.md`](ipo-usage.md)** — when NCSEXPER runs `SGDAT/*.ipo`, the two IPO styles (CABI / INPA), the syscalls those IPOs invoke, and how NCSEXPER hosts INPA's UI primitives alongside its own MFC dialog. Includes the CABI DLL bridge (`Cabiger.dll` / `CabiUS.dll` reached via opcode `0x0D CALLE`).
 9. **[`cabi-binding-plan.md`](cabi-binding-plan.md)** — per-function plan for porting the 97 `CABI.H` externs to a `@emdzej/inpax-cabi-provider` system-function table for Phase 9 (Kernfunktionen runner).
 10. **[`ncsdummy-analysis.md`](ncsdummy-analysis.md)** — NCS Dummy parity analysis + the new `function-list`, `options`, `trace`, `translations`, `property-formulas` package design.
-11. **[`user-flow.md`](user-flow.md)** — end-user flow design for the `apps/ncsx-web` browser SPA, including the phase plan.
+11. **[`user-flow.md`](user-flow.md)** — end-user flow design for the `apps/web` browser SPA, including the phase plan.
 12. **[`POC-DELTAS.md`](POC-DELTAS.md)** — concrete patch list against the existing `bimmerz/packages/ncs-data` TypeScript POC, mapped to line numbers + spec sections.
 
 ## Status

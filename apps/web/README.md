@@ -20,7 +20,7 @@ pnpm --filter @emdzej/ncsx-web dev
 
 ```bash
 pnpm --filter @emdzej/ncsx-web build
-# → apps/ncsx-web/dist/  — static SPA, deploy anywhere
+# → apps/web/dist/  — static SPA, deploy anywhere
 ```
 
 ## What works today (v0)

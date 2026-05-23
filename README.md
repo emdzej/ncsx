@@ -97,7 +97,7 @@ anyone parsing BMW's data formats — no dependency on the web app.
 
 | App | What it is |
 |---|---|
-| [`@emdzej/ncsx-web`](apps/ncsx-web) | The browser SPA at `ncsx.bimmerz.app`. Pure client-side: Svelte 5 + Vite + Tailwind. |
+| [`@emdzej/ncsx-web`](apps/web) | The browser SPA at `ncsx.bimmerz.app`. Pure client-side: Svelte 5 + Vite + Tailwind. |
 
 ## Develop
 

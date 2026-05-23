@@ -7,7 +7,7 @@
  * `applyCodingPlan`, etc.) for the early bring-up. Those bypassed the per-CABD
  * `A_*.ipo` dispatcher and were retired once
  * `@emdzej/ncsx-inpax-cabi-provider` + the orchestrator in
- * `apps/ncsx-web/src/lib/process-ecu.ts` covered the full IPO path for both
+ * `apps/web/src/lib/process-ecu.ts` covered the full IPO path for both
  * read and write. The package now exists purely to publish these shared
  * Ediabas-shape types — `@emdzej/ncsx-identity` and
  * `@emdzej/ncsx-inpax-cabi-provider` consume them.

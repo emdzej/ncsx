@@ -7,7 +7,7 @@ Last updated: 2026-05-22.
 >
 > **The full NCS Expert ↔ IPO ↔ CABI ↔ EDIABAS call architecture** (it's wild):
 > [`call-architecture.md`](call-architecture.md). Required reading before touching
-> `packages/inpax-cabi-provider` or `apps/ncsx-web/src/lib/runtime.svelte.ts`.
+> `packages/inpax-cabi-provider` or `apps/web/src/lib/runtime.svelte.ts`.
 >
 > **NCSEXPER syscall table** (for upstream pluggable inpax `SystemFunctionMap`):
 > [`ncsexper-syscall-table.md`](ncsexper-syscall-table.md) — staged inventory +
@@ -56,10 +56,10 @@ dialogs trust `JOB_STATUS=OKAY`).
 
 | Open item | Where |
 |---|---|
-| Verify readback after FA_WRITE / ZCS_SCHREIBEN | `apps/ncsx-web/src/components/{Fa,Zcs}EditorDialog.svelte` |
-| ZCS_LOESCHEN-before-SG_CODIEREN on ZCS-master chassis re-code | `apps/ncsx-web/src/lib/process-ecu.ts:processWriteCoding` |
+| Verify readback after FA_WRITE / ZCS_SCHREIBEN | `apps/web/src/components/{Fa,Zcs}EditorDialog.svelte` |
+| ZCS_LOESCHEN-before-SG_CODIEREN on ZCS-master chassis re-code | `apps/web/src/lib/process-ecu.ts:processWriteCoding` |
 | Post-write `C_CHECKSUM` verify for `SG_CODIEREN` (`FUN_00406060`) | `process-ecu.ts:processWriteCoding` |
-| Per-FSW default-PSW derivation → real "Apply Defaults" for CABDs without `ANLIEFERZUSTAND` | `apps/ncsx-web` + maybe `packages/function-list` |
+| Per-FSW default-PSW derivation → real "Apply Defaults" for CABDs without `ANLIEFERZUSTAND` | `apps/web` + maybe `packages/function-list` |
 | Authentication (`CDHCallAuthenticate` / `CDHAuthGetRandom`) | `packages/inpax-cabi-provider/src/provider.ts` — stubs; requires BMW seed/key tables we don't ship |
 | OPFS-backed cache for parsed CABD bundles | future Phase 5 (web app) |
 | `TraceOverlay` persistence | future Phase 5 (web app) |
@@ -99,7 +99,7 @@ The cabd-par store is **per-dispatch** (cleared at the start of every job, match
 ```
 ncsx/
 ├── apps/
-│   └── ncsx-web/                       browser SPA (Svelte 5 + Vite)
+│   └── web/                            browser SPA (Svelte 5 + Vite)
 └── packages/
     ├── cabd/                           netto ↔ FSW/PSW encode/decode
     ├── chassis/                        bundle loader + lazy CABD + SWT lookups

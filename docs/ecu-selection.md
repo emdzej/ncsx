@@ -364,7 +364,7 @@ walk needed. To label each module with its logical SG(s), find `SGAUSWAHL_*` row
 `SGNAME == basename`, then collect their `UMRSG` column.
 
 This is what `packages/chassis`'s `CabdLoader.listModules()` returns and what
-`apps/ncsx-web`'s `ModuleList` renders.
+`apps/web`'s `ModuleList` renders.
 
 ### 8.5 Ghidra source-code anchors
 

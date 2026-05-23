@@ -325,7 +325,7 @@ uses `C_S_SCHREIBEN`, not `SG_CODIEREN`), the direct path will return
 
 `packages/wire` is the **fast path** (no IPO interpreter spin-up, no CABI
 provider) for SGBDs that don't need translation. The IPO-runtime path
-(`apps/ncsx-web/src/lib/runtime.svelte.ts`) is the **canonical path** that
+(`apps/web/src/lib/runtime.svelte.ts`) is the **canonical path** that
 matches NCSEXPER's behaviour and handles every SGBD correctly.
 
 Both can coexist. The eventual user-visible behaviour:
