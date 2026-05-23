@@ -10,6 +10,10 @@
     applyPswToNetto,
     decodeCurrentPsw,
   } from "@emdzej/ncsx-function-list";
+  import { formatValue } from "@emdzej/ncsx-property-formulas";
+  import { buildOptionList } from "@emdzej/ncsx-options";
+  import { evalAuftragsausdruck } from "@emdzej/ncsx-predicate";
+  import { faToAsw } from "@emdzej/ncsx-fa-asw";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
   import {
@@ -86,6 +90,118 @@
       ? items
       : items.filter((item) => matchesFilter(item, filter.toLowerCase())),
   );
+
+  /**
+   * Per-(FSW, PSW) applicability against the car's FA, sourced from the
+   * chassis-level CVT DATEN file (NCSDummy's `<BR>CVT.000`). For each
+   * PSW the CVT declares, we evaluate its byte-coded AUFTRAGSAUSDRUCK
+   * predicate against the FA-derived ASW and surface the verdict as a
+   * small chip on the PSW button.
+   *
+   * Three states:
+   *
+   * - `"in-fa"`     — predicate matched; this PSW is one the user's car
+   *                    actually expects (✓ chip).
+   * - `"not-in-fa"` — predicate didn't match; this PSW is in the CABD
+   *                    but isn't part of the car's option set (⚠ chip).
+   * - `"unknown"`   — PSW not in CVT, identity not read, or chassis has
+   *                    no SWTASW — show no chip and let the user code
+   *                    freely. Most CABD PSWs aren't in CVT (it covers
+   *                    only user-visible feature options), so silence
+   *                    here is the common case.
+   *
+   * Computed lazily on the FunctionList view — buildOptionList walks
+   * the whole CVT once, faToAsw walks AT records once, then the index
+   * is O(1) per render. Both inputs are stable across reads (the FA
+   * only changes when identity is re-read), so the derived chains
+   * settle to no-ops on subsequent renders.
+   */
+  const optionList = $derived(
+    app.chassis ? buildOptionList(app.chassis.cvt) : null,
+  );
+
+  /**
+   * ASW bitset derived from the car's identity. Two paths depending on
+   * which chassis-identity format the SG returns:
+   *
+   * - **FA-master** (E60+, F-platforms) — `app.identity.fa` carries the
+   *   FA token string. `faToAsw` walks the AT/SWTASW tables to produce
+   *   KEYIDs.
+   *
+   * - **ZCS-master** (E36/E38/E39/E46/E53) — `app.identity.zcs.sa`
+   *   carries a hex-encoded bit-set. We walk the chassis ZST table,
+   *   pick records whose `saMask` is fully covered by the user's SA,
+   *   collect the associated FSW keywords, then look those up in
+   *   SWTASW to get KEYIDs. Mirrors the inline `groupedSaInfo`
+   *   derivation in IdentityPanel — TODO: factor into
+   *   `@emdzej/ncsx-fa-asw` as `zcsToAsw` so the two paths share code.
+   *
+   * Returns `null` when no identity is read yet, or when the chassis
+   * is missing the lookup table that path needs. Callers treat `null`
+   * as "no applicability data" → chips suppressed.
+   */
+  const asw = $derived.by<ReadonlySet<number> | null>(() => {
+    if (!app.chassis || !app.identity) return null;
+    if (app.identity.fa) {
+      try {
+        return faToAsw(app.identity.fa, { chassis: app.chassis });
+      } catch {
+        return null;
+      }
+    }
+    const zcsSa = app.identity.zcs?.sa?.trim();
+    if (!zcsSa || !app.chassis.zst || !app.chassis.swtAsw) return null;
+    let userSa: bigint;
+    try {
+      userSa = BigInt("0x" + zcsSa);
+    } catch {
+      return null;
+    }
+    const ids = new Set<number>();
+    const seenFsw = new Set<string>();
+    for (const rec of app.chassis.zst.file.records) {
+      if (!rec.fsw || !rec.saMask) continue;
+      if (seenFsw.has(rec.fsw)) continue;
+      let mask: bigint;
+      try {
+        mask = BigInt("0x" + rec.saMask);
+      } catch {
+        continue;
+      }
+      if (mask === 0n) continue;
+      if ((userSa & mask) !== mask) continue;
+      seenFsw.add(rec.fsw);
+      const keyId = app.chassis.swtAsw.byKeyword.get(rec.fsw);
+      if (keyId !== undefined) ids.add(keyId);
+    }
+    return ids;
+  });
+
+  /**
+   * `optionList.functions` is an array; we want O(1) lookup by (FSW,
+   * PSW) at render time, so flatten to `Map<fsw, Map<psw, predicate>>`.
+   * Built once per chassis-level CVT — the inner maps are tiny (≤16
+   * PSWs typically).
+   */
+  const optionIndex = $derived.by<Map<number, Map<number, Uint8Array>>>(() => {
+    const idx = new Map<number, Map<number, Uint8Array>>();
+    if (!optionList) return idx;
+    for (const fn of optionList.functions) {
+      const inner = new Map<number, Uint8Array>();
+      for (const p of fn.parameters) inner.set(p.psw, p.predicate);
+      idx.set(fn.fsw, inner);
+    }
+    return idx;
+  });
+
+  type Applicability = "in-fa" | "not-in-fa" | "unknown";
+
+  function pswApplicability(fsw: number, psw: number): Applicability {
+    if (!asw) return "unknown";
+    const predicate = optionIndex.get(fsw)?.get(psw);
+    if (!predicate) return "unknown";
+    return evalAuftragsausdruck(predicate, asw) ? "in-fa" : "not-in-fa";
+  }
 
   function matchesFilter(item: FunctionListItem, q: string): boolean {
     if (item.kind === "function") {
@@ -782,6 +898,35 @@
   }
 
   /**
+   * Render the live decoded value for a property-style FSW. Slices the
+   * last-read netto at the FSW's address/length window and runs it
+   * through `@emdzej/ncsx-property-formulas` (NCS Dummy's per-keyword
+   * formula table). Returns `null` when there's no formula for the
+   * keyword, the netto hasn't been read yet, or the read was too
+   * short — in any of those cases the row falls back to just its
+   * structural summary, matching the legacy behaviour.
+   *
+   * `module` matches NCS Dummy's argument shape — it's the physical
+   * SGNAME (e.g. `KMBI_E60`), which is what
+   * `app.selectedModule.moduleName` holds.
+   */
+  function propertyValue(item: PropertyItem): string | null {
+    const netto = app.lastReadNetto;
+    if (!netto) return null;
+    if (!app.chassis || !app.selectedModule) return null;
+    const end = item.address + item.length;
+    if (netto.length < end) return null;
+    return formatValue({
+      chassis: app.chassis.code,
+      module: app.selectedModule.moduleName,
+      codingIndex: app.selectedModule.codingIndex,
+      keyword: item.fswKeyword,
+      mask: item.mask,
+      data: netto.subarray(item.address, end),
+    });
+  }
+
+  /**
    * Slice the freshly-read netto at the FSW's window and format as hex.
    * Returns `"—"` when the netto hasn't been read yet or is too short
    * for this FSW (incomplete read). Lets the user eyeball the bytes
@@ -1313,6 +1458,7 @@
               {@const param = describe(p.pswKeyword || `PSW #${p.psw}`)}
               {@const isCurrent = current?.psw === p.psw}
               {@const isTarget = pending ? targetPsw === p.psw : isCurrent}
+              {@const fa = pswApplicability(item.fsw, p.psw)}
               <li class="flex items-baseline justify-between gap-2 text-sm">
                 <button
                   type="button"
@@ -1339,8 +1485,25 @@
                     {/if}
                   </span>
                 </button>
-                <span class="font-mono text-xs text-faint" title="PSW's expected masked data — matches when (netto & mask) === this">
-                  {fmtData(p.data)}
+                <span class="flex items-baseline gap-2">
+                  {#if fa === "in-fa"}
+                    <span
+                      class="rounded bg-emerald-500/15 px-1.5 py-0.5 text-xs text-emerald-700 dark:text-emerald-300"
+                      title="In FA — the car's order options match this PSW's CVT predicate"
+                    >
+                      ✓ in FA
+                    </span>
+                  {:else if fa === "not-in-fa"}
+                    <span
+                      class="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-300"
+                      title="Not in FA — this PSW exists in the CABD but the car's order options don't enable it (CVT predicate didn't match)"
+                    >
+                      ⚠ not in FA
+                    </span>
+                  {/if}
+                  <span class="font-mono text-xs text-faint" title="PSW's expected masked data — matches when (netto & mask) === this">
+                    {fmtData(p.data)}
+                  </span>
                 </span>
               </li>
             {/each}
@@ -1353,11 +1516,20 @@
         </li>
       {:else if item.kind === "property"}
         {@const prop = describe(item.fswKeyword || `PROPERTY #${item.fsw}`)}
+        {@const decoded = propertyValue(item)}
         <li class="rounded border border-divider bg-surface px-3 py-2">
           <div class="flex items-baseline justify-between gap-2">
-            <span class="font-semibold text-foreground">
+            <span class="flex items-baseline gap-2 font-semibold text-foreground">
               {prop.keyword}{#if prop.translation}
-                <span class="ml-2 text-xs font-normal text-faint">— {prop.translation}</span>
+                <span class="text-xs font-normal text-faint">— {prop.translation}</span>
+              {/if}
+              {#if decoded !== null}
+                <span
+                  class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-xs text-accent"
+                  title="Decoded via NCS Dummy formula table"
+                >
+                  {decoded}
+                </span>
               {/if}
             </span>
             <span class="text-xs text-faint">{propertySummary(item)} · unit {item.unit || "h"}</span>

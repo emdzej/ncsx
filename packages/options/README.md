@@ -16,11 +16,11 @@ Mirrors NCS Dummy's `Classes/Options/OptionListReader`. Design notes:
 Walks the CVT DATEN file's rows in document order:
 
 - An `AUFTRAGSAUSDRUCK` row stashes its predicate bytes.
-- The **immediately-following** `FSW_PSW_WW` row consumes that predicate and binds it to
+- The **immediately-following** `FSW_PSW` row consumes that predicate and binds it to
   its `(FSW, PSW)` target.
 - If multiple AUFTRAGSAUSDRUCK fragments accumulate for the same `(FSW, PSW)` pair (a
   legitimate CVT pattern), they're comma-joined into one OR-of-conjunctions blob.
-- `GRUPPE_S` / `INDIVID_S` boundary rows toggle scope; by default only group-scope rows
+- `GRUPPE` / `INDIVID` boundary rows toggle scope; by default only group-scope rows
   are surfaced (per NCS Dummy convention — individual-mode coding isn't part of order
   options).
 
@@ -71,7 +71,7 @@ for (const fn of opts.functions) {
 
 ```ts
 buildOptionList(cvt, {
-  // When true (default), rows inside INDIVID_S scope are skipped. Set false if you want
+  // When true (default), rows inside INDIVID scope are skipped. Set false if you want
   // to surface individual-mode options too (rare; typically used for car-and-key memory
   // edits).
   groupScopeOnly: true,

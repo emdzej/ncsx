@@ -282,6 +282,18 @@ export async function startNcsRuntime(
     // `app.chassis`. NCSEXPER's anchor is the inline strcmp
     // chain in FUN_00402c70 (PC 0x402d25 / 0x402e65 / 0x402ec5).
     //
+    // Wipe the per-session error scratchpad before dispatching. The
+    // IPO's `__inpa_startup__` / cabimain prologue installs a
+    // "no-job-yet" sentinel (typically errNr=1063 / returnVal=1063,
+    // visible in CDHSetError logs as `mod="A_<cabd>.IPS"
+    // proc="cabimain"`); NCSEXPER's `coapiRunCabimain` clears it
+    // immediately before the IPO begins real work. Without this reset
+    // the IPO's post-read `CDHTestError` check trips on its own
+    // sentinel and bails — symptom is SG_CODIEREN returning OKAY at
+    // the EDIABAS layer but writing nothing (only the first
+    // `C_S_LESEN` runs).
+    await cabi.CDHResetError();
+
     // APPLIKATION is the one key NCSEXPER preserves across resets
     // (FUN_0044b880 saves → RemoveAll → restores). We re-seed it
     // unconditionally here since there's no preserved-across-reset

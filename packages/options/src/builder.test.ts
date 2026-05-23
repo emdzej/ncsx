@@ -47,10 +47,10 @@ const aField = (bs: number[]): number[] => [bs.length, ...bs];
 
 function buildCvt(): Uint8Array {
   const defs = [
-    ...BLOCK_DEF(ID_GRUPPE, 'GRUPPE_S', 'S', 'NAME'),
-    ...BLOCK_DEF(ID_INDIVID, 'INDIVID_S', 'S', 'NAME'),
+    ...BLOCK_DEF(ID_GRUPPE, 'GRUPPE', 'S', 'NAME'),
+    ...BLOCK_DEF(ID_INDIVID, 'INDIVID', 'S', 'NAME'),
     ...BLOCK_DEF(ID_AUFTRAG, 'AUFTRAGSAUSDRUCK', 'A', 'PREDICATE'),
-    ...BLOCK_DEF(ID_FSW_PSW, 'FSW_PSW_WW', 'WW', 'FSW,PSW'),
+    ...BLOCK_DEF(ID_FSW_PSW, 'FSW_PSW', 'WW', 'FSW,PSW'),
   ];
 
   return concat(
@@ -61,11 +61,11 @@ function buildCvt(): Uint8Array {
     // Enter group scope
     frame(ID_GRUPPE, [...ascii('GRP'), 0x00]),
 
-    // AUFTRAGSAUSDRUCK [0x01, 0x02] precedes FSW_PSW_WW(fsw=0x100, psw=0x200)
+    // AUFTRAGSAUSDRUCK [0x01, 0x02] precedes FSW_PSW(fsw=0x100, psw=0x200)
     frame(ID_AUFTRAG, aField([0x01, 0x02])),
     frame(ID_FSW_PSW, [...u16(0x100), ...u16(0x200)]),
 
-    // Another AUFTRAGSAUSDRUCK [0x03] precedes FSW_PSW_WW(fsw=0x100, psw=0x201)
+    // Another AUFTRAGSAUSDRUCK [0x03] precedes FSW_PSW(fsw=0x100, psw=0x201)
     frame(ID_AUFTRAG, aField([0x03])),
     frame(ID_FSW_PSW, [...u16(0x100), ...u16(0x201)]),
 
@@ -96,7 +96,7 @@ describe('buildOptionList', () => {
     expect(list.functions.map((f) => f.fsw)).toEqual([0x100, 0x101, 0x102]);
   });
 
-  it('pairs AUFTRAGSAUSDRUCK with the next FSW_PSW_WW', () => {
+  it('pairs AUFTRAGSAUSDRUCK with the next FSW_PSW', () => {
     const list = buildOptionList(cvt);
     const fn = list.functions.find((f) => f.fsw === 0x100)!;
     const p200 = fn.parameters.find((p) => p.psw === 0x200)!;
@@ -106,21 +106,21 @@ describe('buildOptionList', () => {
     expect(Array.from(p201.predicate)).toEqual([0x03]);
   });
 
-  it('emits an empty predicate when no AUFTRAGSAUSDRUCK precedes the FSW_PSW_WW', () => {
+  it('emits an empty predicate when no AUFTRAGSAUSDRUCK precedes the FSW_PSW', () => {
     const list = buildOptionList(cvt);
     const fn = list.functions.find((f) => f.fsw === 0x101)!;
     expect(fn.parameters[0]!.psw).toBe(0x300);
     expect(fn.parameters[0]!.predicate.length).toBe(0);
   });
 
-  it('skips INDIVID_S-scoped rows by default', () => {
+  it('skips INDIVID-scoped rows by default', () => {
     const list = buildOptionList(cvt);
     const fn = list.functions.find((f) => f.fsw === 0x100)!;
-    // PSW 0x999 should NOT appear (it was inside INDIVID_S)
+    // PSW 0x999 should NOT appear (it was inside INDIVID)
     expect(fn.parameters.find((p) => p.psw === 0x999)).toBeUndefined();
   });
 
-  it('includes INDIVID_S rows when groupScopeOnly:false', () => {
+  it('includes INDIVID rows when groupScopeOnly:false', () => {
     const list = buildOptionList(cvt, { groupScopeOnly: false });
     const fn = list.functions.find((f) => f.fsw === 0x100)!;
     const p999 = fn.parameters.find((p) => p.psw === 0x999);

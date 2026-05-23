@@ -506,9 +506,13 @@ export async function processWriteCoding(
   }
 
   let jobStatus: string | undefined;
+  let lastErr: ReturnType<typeof handle.cabi.getLastCdhError> | null = null;
+  let returnVal = 0;
   try {
     await handle.runCabimain("SG_CODIEREN");
     jobStatus = handle.cabi.lastJobStatus;
+    lastErr = handle.cabi.getLastCdhError();
+    returnVal = handle.cabi.getReturnVal();
   } finally {
     await handle.dispose();
   }
@@ -518,6 +522,25 @@ export async function processWriteCoding(
       ok: false,
       jobStatus,
       error: `IPO ran SG_CODIEREN but JOB_STATUS=${jobStatus ?? "(missing)"} — write did not complete cleanly`,
+    };
+  }
+
+  // `JOB_STATUS=OKAY` only reflects the *last* EDIABAS job the IPO ran
+  // (typically IDENT or a verify read). The IPO itself signals success
+  // via `CDHSetReturnVal(0)` and clean error state. A non-zero
+  // `returnVal` or a leftover `CDHSetError` after dispatch means the
+  // IPO bailed out cleanly without reaching `C_S_AUFTRAG` — silently
+  // skipping the write. Surface both so the user sees what happened.
+  if (returnVal !== 0 || (lastErr && lastErr.errNr !== 0)) {
+    return {
+      ok: false,
+      jobStatus,
+      error:
+        `IPO bailed before writing — returnVal=${returnVal}` +
+        (lastErr && lastErr.errNr !== 0
+          ? ` · errNr=${lastErr.errNr} at ${lastErr.modulName}:${lastErr.procName}:${lastErr.lineNr}` +
+            (lastErr.errorInfo ? ` "${lastErr.errorInfo}"` : "")
+          : ""),
     };
   }
 

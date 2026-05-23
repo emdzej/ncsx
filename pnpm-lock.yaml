@@ -107,6 +107,9 @@ importers:
       '@emdzej/ncsx-predicate':
         specifier: workspace:*
         version: link:../../packages/predicate
+      '@emdzej/ncsx-property-formulas':
+        specifier: workspace:*
+        version: link:../../packages/property-formulas
       '@emdzej/ncsx-text-tables':
         specifier: workspace:*
         version: link:../../packages/text-tables

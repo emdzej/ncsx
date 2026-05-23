@@ -36,6 +36,7 @@
     "@emdzej/ncsx-patches": "workspace:*",
     "@emdzej/ncsx-pfl": "workspace:*",
     "@emdzej/ncsx-predicate": "workspace:*",
+    "@emdzej/ncsx-property-formulas": "workspace:*",
     "@emdzej/ncsx-text-tables": "workspace:*",
     "@emdzej/ncsx-trace": "workspace:*",
     "@emdzej/ncsx-translations": "workspace:*",
