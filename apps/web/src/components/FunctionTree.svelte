@@ -76,6 +76,22 @@
    */
   let targets = $state<Record<number, number>>({});
 
+  /**
+   * "Patch capture" mode — when ON, clicking PSWs toggles them in
+   * `patchSelections` instead of staging an edit in `targets`. Lets the
+   * user build a patch from PSWs that are *already* coded (e.g. after
+   * applying a change to the ECU and re-reading), without re-editing
+   * anything. Default OFF so the standard UI stays uncluttered.
+   *
+   * `patchSelections` is independent from `targets` and survives mode
+   * toggling — so a user can flip into capture mode, mark a few PSWs,
+   * flip back, stage some edits, flip in again, mark more, etc. It's
+   * cleared explicitly via the "Clear selection" button or when the
+   * user navigates away from the module.
+   */
+  let patchCaptureMode = $state(false);
+  let patchSelections = $state<Record<number, number>>({});
+
   /** Translation lookup (or undefined while the CSV is still loading). */
   const tr = $derived(app.translations?.entries);
 
@@ -339,9 +355,31 @@
     }
   }
 
+  /**
+   * Capture-mode checkbox handler — toggles the PSW in
+   * `patchSelections`. Independent from `setTarget` so the radio
+   * still drives staged edits even with capture mode on (the user
+   * can stage an edit AND mark which PSW goes into the patch in one
+   * pass if they want to).
+   */
+  function toggleCapture(item: FunctionItem, param: Parameter): void {
+    if (patchSelections[item.fsw] === param.psw) {
+      delete patchSelections[item.fsw];
+    } else {
+      patchSelections[item.fsw] = param.psw;
+    }
+  }
+
   function discardEdits(): void {
     targets = {};
   }
+
+  function clearPatchSelection(): void {
+    patchSelections = {};
+  }
+
+  /** Count of FSWs selected for patch capture — drives Save/Append gating. */
+  const patchSelectionCount = $derived(Object.keys(patchSelections).length);
 
   /**
    * Hidden file input — clicked programmatically by the Import button.
@@ -409,7 +447,7 @@
         const text = await file.text();
         const patch = parsePatch(text);
         openPatchDialog("append", {
-          currentTargets: targets,
+          currentTargets: patchCaptureMode ? patchSelections : targets,
           loadedPatch: patch,
           loadedFilename: file.name,
         });
@@ -466,6 +504,8 @@
     app.lastReadNetto = null;
     app.availableJobs = null;
     targets = {};
+    patchSelections = {};
+    patchCaptureMode = false;
     app.view = "browse-modules";
   }
 
@@ -1126,14 +1166,50 @@
       Import FSW_PSW.MAN
     </button>
     <span class="mx-1 h-5 w-px bg-divider" aria-hidden="true"></span>
+    <!--
+      Patch-capture mode toggle. Default OFF — clicking PSWs stages
+      edits as usual. ON — clicking PSWs toggles inclusion in a
+      separate "patchSelections" map that Save / Append-to-patch use
+      instead of staged edits. Lets the user build a patch from
+      already-coded PSWs after applying a change to the ECU and
+      re-reading.
+    -->
+    <button
+      class="rounded border px-2 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 {patchCaptureMode
+        ? 'border-accent bg-accent/15 text-foreground hover:bg-accent/25'
+        : 'border-divider bg-base text-muted hover:border-accent hover:bg-elevated'}"
+      onclick={() => (patchCaptureMode = !patchCaptureMode)}
+      disabled={!app.functionList}
+      title={patchCaptureMode
+        ? "Capture mode ON — clicking PSWs toggles them in the patch selection. Click again to exit."
+        : "Capture mode OFF — click to switch into 'build patch from current PSWs' mode (lets you snapshot already-coded values without staging edits)."}
+    >
+      {patchCaptureMode ? `● Capture · ${patchSelectionCount} selected` : "○ Capture"}
+    </button>
+    {#if patchCaptureMode && patchSelectionCount > 0}
+      <button
+        class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated"
+        onclick={clearPatchSelection}
+        title="Clear all PSWs from the patch selection."
+      >
+        Clear selection
+      </button>
+    {/if}
     <button
       class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
       onclick={() =>
-        openPatchDialog("save", { currentTargets: targets })}
-      disabled={!app.functionList || pendingEdits.length === 0 || !app.selectedModule}
-      title={pendingEdits.length > 0
-        ? "Save staged edits as a shareable .ncsxpatch.yaml — YAML envelope around the same FSW/PSW pairs as MAN, plus metadata (title, description, author, keywords) and optional pinning to the current coding index."
-        : "Stage at least one PSW edit first"}
+        openPatchDialog("save", {
+          currentTargets: patchCaptureMode ? patchSelections : targets,
+        })}
+      disabled={!app.functionList || !app.selectedModule ||
+        (patchCaptureMode ? patchSelectionCount === 0 : pendingEdits.length === 0)}
+      title={patchCaptureMode
+        ? patchSelectionCount > 0
+          ? `Save the ${patchSelectionCount} selected PSW${patchSelectionCount === 1 ? "" : "s"} as a shareable .ncsxpatch.yaml.`
+          : "Select at least one PSW first (click a PSW row in capture mode)."
+        : pendingEdits.length > 0
+          ? "Save staged edits as a shareable .ncsxpatch.yaml — YAML envelope around the same FSW/PSW pairs as MAN, plus metadata (title, description, author, keywords) and optional pinning to the current coding index."
+          : "Stage at least one PSW edit first — or flip on Capture mode to build a patch from currently-coded PSWs."}
     >
       Save as patch…
     </button>
@@ -1147,10 +1223,15 @@
     <button
       class="rounded border border-divider bg-base px-2 py-1 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
       onclick={() => appendPatchInput?.click()}
-      disabled={!app.functionList || pendingEdits.length === 0 || !app.selectedModule}
-      title={pendingEdits.length > 0
-        ? "Append staged edits to an existing .ncsxpatch.yaml — pick a patch file, optionally pick merge-vs-replace if it already covers this module, then download the combined patch."
-        : "Stage at least one PSW edit first"}
+      disabled={!app.functionList || !app.selectedModule ||
+        (patchCaptureMode ? patchSelectionCount === 0 : pendingEdits.length === 0)}
+      title={patchCaptureMode
+        ? patchSelectionCount > 0
+          ? `Append the ${patchSelectionCount} selected PSW${patchSelectionCount === 1 ? "" : "s"} to an existing .ncsxpatch.yaml.`
+          : "Select at least one PSW first (click a PSW row in capture mode)."
+        : pendingEdits.length > 0
+          ? "Append staged edits to an existing .ncsxpatch.yaml — pick a patch file, optionally pick merge-vs-replace if it already covers this module, then download the combined patch."
+          : "Stage at least one PSW edit first."}
     >
       Append to patch…
     </button>
@@ -1458,6 +1539,7 @@
               {@const param = describe(p.pswKeyword || `PSW #${p.psw}`)}
               {@const isCurrent = current?.psw === p.psw}
               {@const isTarget = pending ? targetPsw === p.psw : isCurrent}
+              {@const isSelected = patchSelections[item.fsw] === p.psw}
               {@const fa = pswApplicability(item.fsw, p.psw)}
               <li class="flex items-baseline justify-between gap-2 text-sm">
                 <button
@@ -1504,6 +1586,24 @@
                   <span class="font-mono text-xs text-faint" title="PSW's expected masked data — matches when (netto & mask) === this">
                     {fmtData(p.data)}
                   </span>
+                  {#if patchCaptureMode}
+                    <button
+                      type="button"
+                      class="text-base leading-none transition disabled:cursor-not-allowed disabled:opacity-40 {isSelected
+                        ? 'text-accent hover:text-accent-muted'
+                        : 'text-faint hover:text-foreground'}"
+                      onclick={() => toggleCapture(item, p)}
+                      disabled={!app.lastReadNetto}
+                      title={isSelected
+                        ? "In patch — click to remove"
+                        : isCurrent
+                          ? "Add this (currently-coded) PSW to the patch selection"
+                          : "Add this PSW to the patch selection"}
+                      aria-label={isSelected ? "Remove from patch" : "Add to patch"}
+                    >
+                      {isSelected ? "☑" : "☐"}
+                    </button>
+                  {/if}
                 </span>
               </li>
             {/each}
