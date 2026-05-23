@@ -42,6 +42,19 @@ pnpm --filter @emdzej/ncsx-web build
    `FunctionList` (via `@emdzej/ncsx-function-list`), and renders a read-only tree of
    functions / properties / unoccupied / group headers. FSW/PSW keywords resolved via the
    chassis's SWT tables.
+6. **Read / write coding** — `CODIERDATEN_LESEN` and `SG_CODIEREN` through the per-CABD
+   `A_*.ipo` dispatcher (the load-bearing path NCS Expert uses). Edit PSWs in the tree,
+   review the byte-level diff, apply.
+7. **NCS Expert interop** — Export `FSW_PSW.TRC` / `FSW_PSW.MAN` / `NETTODAT.TRC`, import
+   `FSW_PSW.MAN`. Same formats NCS Expert writes to its `WORK/` folder.
+8. **Shareable patches (`.ncsxpatch.yaml`)** — Save / Append / Apply YAML patches that
+   wrap FSW/PSW edits with metadata (title, description, author, keywords, chassis) and
+   optional coding-index pinning + `require_current` pre-write assertions. Multi-module
+   patches in one file; apply stages edits for the currently-loaded module. Format
+   reference: [`docs/patches.md`](../../docs/patches.md).
+9. **FA / ZCS editor** — modify the chassis FA token list (E60+) or ZCS bit-set
+   (E36/E38/E39/E46/E53), write through the identity SG's `FA_WRITE` / `ZCS_SCHREIBEN`
+   job.
 
 ## Subsystems we discover
 
@@ -59,14 +72,13 @@ pnpm --filter @emdzej/ncsx-web build
 
 ## What's coming
 
-Per [`docs/user-flow.md`](../../docs/user-flow.md) phase plan:
+Per [`docs/user-flow.md`](../../docs/user-flow.md) phase plan and
+[`docs/STATUS.md`](../../docs/STATUS.md):
 
-- Phase 5: OPFS-backed cache for parsed CABD bundles (skip the re-parse on second visit)
-  + draft `TraceOverlay` persistence (so a tab close doesn't lose your edits).
-- Phase 6: `packages/wire` — `WebSerialTransport` + `@emdzej/ediabasx` to read/write the
-  ECU directly.
-- Phase 7: `Apply to ECU` button.
-- Phase 8: `Export TRC` / `Export MAN` / `Import…` for NCS Expert interop.
+- OPFS-backed cache for parsed CABD bundles (skip the re-parse on second visit).
+- `TraceOverlay` persistence — survive a tab close without losing staged edits.
+- Generic Kernfunktionen runner (arbitrary jobs across all SGs).
+- A `bimmerz-patches` community repo + in-app browser.
 
 ## Browser support
 

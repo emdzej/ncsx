@@ -49,6 +49,12 @@ File System Access + Web Serial).
 - **Export / import** — `FSW_PSW.TRC` (full snapshot), `FSW_PSW.MAN` (staged
   edits), `NETTODAT.TRC` (raw bytes). All formats match what NCS Expert writes
   to `WORK/`.
+- **Shareable patches** — `.ncsxpatch.yaml` files wrap the same FSW/PSW edits
+  in a YAML envelope with title / description / author / keywords / chassis,
+  can cover multiple modules in one file, and support optional coding-index
+  pinning + `require_current` pre-write assertions. **Save as patch** /
+  **Append to patch** / **Apply patch** sit next to the MAN buttons. Format
+  reference: [`docs/patches.md`](docs/patches.md).
 
 See [`docs/STATUS.md`](docs/STATUS.md) for the live status board.
 
@@ -86,6 +92,7 @@ anyone parsing BMW's data formats — no dependency on the web app.
 | [`@emdzej/ncsx-identity`](packages/identity) | Read VIN / FA / ZCS from a connected ECU; picks the right identity SG per chassis. |
 | [`@emdzej/ncsx-inpax-cabi-provider`](packages/inpax-cabi-provider) | CABI/CDH bridge — implements the 80+ `CDH*` functions NCSEXPER's `A_*.ipo` dispatchers call. |
 | [`@emdzej/ncsx-options`](packages/options) | NCSDummy-style coding-option overlay (per-FSW friendly names + valid PSW set). |
+| [`@emdzej/ncsx-patches`](packages/patches) | `.ncsxpatch.yaml` shareable-coding-patches format — parse / serialize / validate against a FunctionList. |
 | [`@emdzej/ncsx-pfl`](packages/pfl) | `.pfl` profile INI parser. |
 | [`@emdzej/ncsx-predicate`](packages/predicate) | Byte-coded `AUFTRAGSAUSDRUCK` predicate compiler/runner. |
 | [`@emdzej/ncsx-property-formulas`](packages/property-formulas) | Inverse formulas for property-style FSWs (mileage / date / VIN). |
