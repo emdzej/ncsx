@@ -1,11 +1,13 @@
 {
   "name": "@emdzej/ncsx-translations",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "CSV parser + label formatter for NCSDummy's community-maintained Translations.csv (keyword → English). See ../../docs/ncsdummy-analysis.md.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",

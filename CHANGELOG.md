@@ -4,6 +4,69 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 — 2026-05-23
+
+NCSDummy-equivalent UI surface plus a shareable patch format, riding on top of
+the 0.1.0 coding engine.
+
+### Added
+
+- **Shareable coding patches (`.ncsxpatch.yaml`)** — Save / Append / Apply
+  buttons next to the existing TRC/MAN ones. Patches are YAML files that wrap
+  the same FSW/PSW edits a `.MAN` carries, plus title / description / author /
+  keywords / chassis metadata, optional coding-index pinning, and optional
+  `require_current` pre-write assertions. Multi-module patches in one file;
+  apply stages edits for the currently-loaded module. Format reference:
+  [`docs/patches.md`](docs/patches.md). New companion repo:
+  [`ncsx-community-patches`](https://github.com/emdzej/ncsx-community-patches)
+  — drop a patch under `patches/<CHASSIS>/`, open a PR, indexes regenerate on
+  merge.
+- **Decoded property values** — property-style FSWs (VIN, mileage, dates,
+  steering ratio, fuel-percent, …) now render with their decoded value via
+  NCSDummy's per-keyword formula table (149 ported formulas covering 1055 case
+  arms). Falls back silently for keywords with no formula. Activated the
+  formerly-unused `@emdzej/ncsx-property-formulas` package.
+- **In-FA / not-in-FA chips** on enumerated PSW rows — driven by the
+  chassis-level CVT predicate evaluator. Green ✓ chip means the car's order
+  options match the PSW's predicate; amber ⚠ means the PSW is in the CABD but
+  the car's options don't enable it. Works on both FA-master chassis
+  (E60+ / F-platforms) and ZCS-master chassis (E36/E38/E39/E46/E53) — the
+  latter via SA-bit expansion through the chassis ZST + SWTASW tables.
+  Activated `@emdzej/ncsx-options` + `@emdzej/ncsx-predicate`.
+
+### Fixed
+
+- **`SG_CODIEREN` silently no-op'd after the cce748f error-scratchpad wiring.**
+  Every IPO's `cabimain` prologue installs a "no-job-yet" sentinel via
+  `CDHSetError` as its first instruction; without an explicit reset the IPO's
+  later `CDHTestError` saw the sentinel and bailed before reaching
+  `C_S_AUFTRAG`. Symptom: write returned `JOB_STATUS=OKAY` but nothing changed
+  in the ECU. `runCabimain` now resets the error scratchpad right before
+  dispatch (mirrors NCSEXPER's `coapiRunCabimain`). Write outcome is now also
+  gated on the IPO's `returnVal` / `lastCdhError` — `JOB_STATUS` alone is too
+  permissive (it tracks the last apiJob, typically a harmless IDENT).
+- **Options builder block-name mismatch.** The CVT parser was checking for
+  `GRUPPE_S` / `INDIVID_S` / `FSW_PSW_WW` (those are NCSDummy's *C# class*
+  names) but real on-disk DATEN block strings are unsuffixed (`GRUPPE` /
+  `INDIVID` / `FSW_PSW`). Verified across E36 / E39 / E46 / E53 / E60 / E89
+  CVTs — none use the suffixed forms. The package's own tests passed because
+  they fed it synthetic data using the buggy names.
+
+### Changed
+
+- Renamed `apps/ncsx-web` → `apps/web` to align with the inpax / ediabasx
+  conventions. Same npm package name (`@emdzej/ncsx-web`).
+- Renamed `e46` → `E46` in the community-patches repo to match canonical
+  chassis codes (indexer normalises chassis from patch metadata regardless of
+  directory casing).
+
+### Internal
+
+- New `@emdzej/ncsx-patches` package — zod schema, YAML parser/serializer,
+  validate-against-FunctionList helpers.
+- Workspace bumped to **0.2.0** across all 19 publishable packages plus the
+  private root + web app.
+
 ## 0.1.0 — 2026-05-22
 
 Initial release. NCS Expert running in the browser, end-to-end against real BMW ECUs over

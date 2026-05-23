@@ -1,11 +1,13 @@
 {
   "name": "@emdzej/ncsx-identity",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read VIN / FA / ZCS from a connected BMW ECU. Picks the right identity SG per chassis using SGFAM's FA/ZCS flags (no hardcoded chassis tables).",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
