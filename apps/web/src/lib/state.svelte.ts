@@ -7,7 +7,7 @@ import { loadConfig, type WebConfig } from "./config";
 import type { NcsxInstall } from "./daten-install";
 
 /**
- * Result of reading the chassis-identity payload from a user-picked SG. FA and ZCS are
+ * Result of reading the chassis-identity payload. FA and ZCS are
  * **structurally different** even though they encode the same information:
  *
  * - **FA** (post-E60-ish) is a single token string the SG hands back verbatim:
@@ -17,12 +17,20 @@ import type { NcsxInstall } from "./daten-install";
  *   (version-number). NCS Expert exposes them in the "Enter ZCS" dialog as separate
  *   text inputs; editing the bit-set means toggling bits per ZST.
  *
- * Exactly one of `fa` / `zcs` is populated per read — whichever the source SG carries.
+ * Both fields can be populated at once — many ECUs host both roles (E46
+ * AKMB+KMB is the canonical example: same SGBD `C_KMB46`, separate
+ * CABDs `A_AKMB46` / `A_KMB46`). Each read merges into the existing
+ * identity instead of replacing it, with `faSource` / `zcsSource`
+ * tracking which SGFAM row each payload came from so the editors can
+ * dispatch writes against the matching CABD.
+ *
  * VIN comes through on both paths (read separately via `FGNR_LESEN`).
  */
 export interface VehicleIdentity {
-  /** SGFAM row the user picked (sgName / sgbd / cabd / fa / zcs flags). */
-  source: SgfamRow;
+  /** SGFAM row the FA payload was read from (drives FA_WRITE's CABD). */
+  faSource?: SgfamRow;
+  /** SGFAM row the ZCS payload was read from (drives ZCS_SCHREIBEN's CABD). */
+  zcsSource?: SgfamRow;
   /** 17-character VIN string, or undefined when the SG didn't return one. */
   vin?: string;
   /** FA token string (FA-master SGs). */

@@ -160,13 +160,13 @@
   );
 
   /**
-   * Pick a SG to dispatch ZCS_SCHREIBEN against. Prefer the SG that
-   * identity was read from (most recent context). Fall back to the
-   * first ZCS-master SG in SGFAM.
+   * Pick a SG to dispatch ZCS_SCHREIBEN against. Prefer the SG the ZCS
+   * was read from (so we hit the same ECU with the matching CABD);
+   * fall back to the first ZCS-master SGFAM row.
    */
   const targetSg = $derived.by<SgfamRow | null>(() => {
     if (!app.chassis) return null;
-    if (app.identity?.source) return app.identity.source;
+    if (app.identity?.zcsSource) return app.identity.zcsSource;
     const masters = findSgsByFlag(app.chassis.sgfam, "zcs");
     return masters[0] ?? null;
   });

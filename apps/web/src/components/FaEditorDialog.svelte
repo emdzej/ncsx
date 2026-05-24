@@ -179,13 +179,14 @@
   const hasChanges = $derived(added.length > 0 || removed.length > 0);
 
   /**
-   * Pick a SG to dispatch FA_WRITE against. Prefer the SG identity
-   * was read from (so we hit the same ECU); fall back to the first
-   * FA-master SGFAM row. Without one of those we can't dispatch.
+   * Pick a SG to dispatch FA_WRITE against. Prefer the SG the FA was
+   * read from (so we hit the same ECU with the same CABD); fall back
+   * to the first FA-master SGFAM row. Without one of those we can't
+   * dispatch.
    */
   const targetSg = $derived.by<SgfamRow | null>(() => {
     if (!app.chassis) return null;
-    if (app.identity?.source) return app.identity.source;
+    if (app.identity?.faSource) return app.identity.faSource;
     const masters = findSgsByFlag(app.chassis.sgfam, "fa");
     return masters[0] ?? null;
   });

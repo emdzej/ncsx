@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { findSgsByFlag } from "@emdzej/ncsx-chassis";
   import { padFgnrToVin } from "@emdzej/ncsx-identity";
   import { tokenizeFa, faToAsw } from "@emdzej/ncsx-fa-asw";
   import { selectEcus } from "@emdzej/ncsx-ecu-select";
@@ -165,26 +164,52 @@
   );
 
   /**
-   * FA-master SGs (SGFAM `FA=1`) — modern chassis. On E46 that's typically AKMB + ALSZ;
-   * on F-series it'll be ZGW or CAS4. Sort alphabetically for stable display.
+   * Identity-master SGs, grouped by SGBD. The same physical ECU often
+   * appears in SGFAM as two rows with the same `sgbd` but different
+   * `cabd`s — one carrying the FA-master flag, one the ZCS-master
+   * flag (E46 `AKMB`/`KMB` both speak `C_KMB46`; `ALSZ`/`LSZ` both
+   * speak `C_LSZA`). Merging by SGBD shows each ECU once with both
+   * Read FA / Read ZCS buttons; clicking a button picks the matching
+   * row so the IPO dispatcher under the right CABD runs.
+   *
+   * `primary` is the row we'd display the SG-name from — prefer the FA-master
+   * (the "modern" personality) when both exist, else the lone one we have.
    */
-  const faMasters = $derived.by<SgfamRow[]>(() => {
+  const identityMasters = $derived.by<
+    Array<{
+      sgbd: string;
+      primary: SgfamRow;
+      fa: SgfamRow | null;
+      zcs: SgfamRow | null;
+    }>
+  >(() => {
     if (!app.chassis) return [];
-    return findSgsByFlag(app.chassis.sgfam, "fa")
-      .slice()
-      .sort((a, b) => a.sgName.localeCompare(b.sgName));
-  });
-
-  /**
-   * ZCS-master SGs (SGFAM `ZCS=1`) — pre-FA chassis (E36/E38/E39/E46/E53). Reading
-   * returns structured GM/SA/VN bytes; decoding the SA bit-set into named codes needs
-   * the chassis-side `<BR>ZST.*` table and isn't wired yet (assumption A6).
-   */
-  const zcsMasters = $derived.by<SgfamRow[]>(() => {
-    if (!app.chassis) return [];
-    return findSgsByFlag(app.chassis.sgfam, "zcs")
-      .slice()
-      .sort((a, b) => a.sgName.localeCompare(b.sgName));
+    const groups = new Map<
+      string,
+      { sgbd: string; fa: SgfamRow | null; zcs: SgfamRow | null }
+    >();
+    for (const row of app.chassis.sgfam.values()) {
+      if (row.fa !== 1 && row.zcs !== 1) continue;
+      if (!row.sgbd) continue;
+      let entry = groups.get(row.sgbd);
+      if (!entry) {
+        entry = { sgbd: row.sgbd, fa: null, zcs: null };
+        groups.set(row.sgbd, entry);
+      }
+      if (row.fa === 1 && !entry.fa) entry.fa = row;
+      if (row.zcs === 1 && !entry.zcs) entry.zcs = row;
+    }
+    return [...groups.values()]
+      .map((g) => ({
+        sgbd: g.sgbd,
+        fa: g.fa,
+        zcs: g.zcs,
+        // FA-master takes display precedence — it's the personality
+        // NCSEXPER uses for identity in modern dispatchers. Fall back
+        // to the ZCS-master when no FA-master exists.
+        primary: (g.fa ?? g.zcs) as SgfamRow,
+      }))
+      .sort((a, b) => a.primary.sgName.localeCompare(b.primary.sgName));
   });
 
   const canConnect = $derived(connection.status.kind === "connected");
@@ -222,6 +247,11 @@
    *
    * Jobs are sequential — the IPO mutates VM state per call, and we own the
    * VM for the duration of each `runCabimain`.
+   *
+   * Merging policy: an existing ZCS read on the same vehicle is preserved
+   * (an FA read shouldn't blow away the ZCS the user just pulled from the
+   * sibling personality on the same ECU). The new FA replaces the old one;
+   * VIN replaces the old one too since it's read here.
    */
   async function onReadFaFromSg(row: SgfamRow): Promise<void> {
     if (!connection.session || reading || !row.sgbd || !row.cabd) return;
@@ -241,7 +271,8 @@
         const vin =
           typeof rawFgnr === "string" && rawFgnr ? padFgnrToVin(rawFgnr).vin : undefined;
         app.identity = {
-          source: row,
+          ...(app.identity ?? {}),
+          faSource: row,
           vin,
           fa: typeof fa === "string" ? fa : undefined,
           vinStatus,
@@ -260,7 +291,9 @@
    * Read VIN + ZCS via the IPO dispatcher. `cabimain("ZCS_LESEN")` routes to
    * the IPO's `ZcsLesen` handler which calls `apiJob` for the SGBD's
    * `ZCS_LESEN` and emits `GM_SCHLUESSEL` / `SA_SCHLUESSEL` / `VN_SCHLUESSEL`.
-   * The SA-bit decoding via `<BR>ZST.*` is a separate package (assumption A6).
+   *
+   * Merging policy: see `onReadFaFromSg` — an existing FA payload is
+   * preserved.
    */
   async function onReadZcsFromSg(row: SgfamRow): Promise<void> {
     if (!connection.session || reading || !row.sgbd || !row.cabd) return;
@@ -287,7 +320,8 @@
           typeof vn === "string";
 
         app.identity = {
-          source: row,
+          ...(app.identity ?? {}),
+          zcsSource: row,
           vin: typeof vin === "string" ? vin : undefined,
           zcs: haveZcs
             ? { gm: gm as string, sa: sa as string, vn: vn as string }
@@ -409,7 +443,15 @@
       {/if}
 
       <p class="pt-1 font-sans text-faint">
-        read from <span class="font-mono">{id.source.sgName}</span> ({id.source.sgbd})
+        {#if id.faSource && id.zcsSource}
+          FA from <span class="font-mono">{id.faSource.sgName}</span> · ZCS from
+          <span class="font-mono">{id.zcsSource.sgName}</span>
+          ({id.faSource.sgbd === id.zcsSource.sgbd ? id.faSource.sgbd : `${id.faSource.sgbd} / ${id.zcsSource.sgbd}`})
+        {:else if id.faSource}
+          read from <span class="font-mono">{id.faSource.sgName}</span> ({id.faSource.sgbd})
+        {:else if id.zcsSource}
+          read from <span class="font-mono">{id.zcsSource.sgName}</span> ({id.zcsSource.sgbd})
+        {/if}
       </p>
     </div>
 
@@ -549,70 +591,55 @@
   {:else}
     {#if !canConnect}
       <p class="text-xs text-faint">Connect to the ECU to read FA / ZCS / VIN.</p>
-    {:else if faMasters.length === 0 && zcsMasters.length === 0}
+    {:else if identityMasters.length === 0}
       <p class="text-xs text-faint">
         No identity-master SGs found in <span class="font-mono">{app.chassis?.code}</span>'s
         SGFAM. Check the chassis loaded correctly.
       </p>
     {:else}
-      <p class="mb-2 text-xs text-faint">Pick an ECU to read its identity payload.</p>
-
-      {#if faMasters.length > 0}
-        <p class="mb-1 text-xs font-semibold uppercase tracking-wider text-faint">
-          FA-master · {faMasters.length}
-        </p>
-        <ul class="mb-3 space-y-1">
-          {#each faMasters as row (row.sgName)}
-            <li class="flex items-baseline justify-between gap-2 text-sm">
-              <span>
-                <span class="font-semibold text-foreground">{row.sgName}</span>
-                <span class="ml-2 font-mono text-xs text-faint">{row.sgbd}</span>
-              </span>
+      <p class="mb-2 text-xs text-faint">
+        Identity-master ECUs · {identityMasters.length} — pick an operation per ECU.
+      </p>
+      <ul class="space-y-1">
+        {#each identityMasters as g (g.sgbd)}
+          {@const label = g.fa && g.zcs && g.fa.sgName !== g.zcs.sgName
+            ? `${g.fa.sgName} / ${g.zcs.sgName}`
+            : g.primary.sgName}
+          {@const faRow = g.fa}
+          {@const zcsRow = g.zcs}
+          {@const activeOnThisGroup =
+            activeSgName !== null &&
+            (activeSgName === faRow?.sgName || activeSgName === zcsRow?.sgName)}
+          <li class="flex items-baseline justify-between gap-2 text-sm">
+            <span>
+              <span class="font-semibold text-foreground">{label}</span>
+              <span class="ml-2 font-mono text-xs text-faint">{g.sgbd}</span>
+            </span>
+            <span class="flex gap-1.5">
               <button
-                class="rounded border border-divider bg-base px-2 py-0.5 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-                onclick={() => onReadFaFromSg(row)}
-                disabled={reading || !row.sgbd}
-                title={row.sgbd
-                  ? `Read FA + VIN from ${row.sgName} via ${row.sgbd}`
-                  : `SGFAM row for ${row.sgName} has no SGBD`}
+                class="rounded border border-divider bg-base px-2 py-0.5 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
+                onclick={() => faRow && onReadFaFromSg(faRow)}
+                disabled={reading || faRow === null || !faRow.cabd}
+                title={faRow
+                  ? `Read FA + VIN from ${faRow.sgName} via ${faRow.sgbd} (${faRow.cabd}.IPO)`
+                  : `${g.sgbd} has no FA-master personality in SGFAM`}
               >
-                {activeSgName === row.sgName ? "Reading…" : "Read FA"}
+                {activeOnThisGroup && activeSgName === faRow?.sgName ? "Reading…" : "Read FA"}
               </button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-
-      {#if zcsMasters.length > 0}
-        <p class="mb-1 text-xs font-semibold uppercase tracking-wider text-faint">
-          ZCS-master · {zcsMasters.length}
-        </p>
-        <ul class="space-y-1">
-          {#each zcsMasters as row (row.sgName)}
-            <li class="flex items-baseline justify-between gap-2 text-sm">
-              <span>
-                <span class="font-semibold text-foreground">{row.sgName}</span>
-                <span class="ml-2 font-mono text-xs text-faint">{row.sgbd}</span>
-              </span>
               <button
-                class="rounded border border-divider bg-base px-2 py-0.5 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
-                onclick={() => onReadZcsFromSg(row)}
-                disabled={reading || !row.sgbd}
-                title={row.sgbd
-                  ? `Read raw ZCS + VIN from ${row.sgName} via ${row.sgbd}`
-                  : `SGFAM row for ${row.sgName} has no SGBD`}
+                class="rounded border border-divider bg-base px-2 py-0.5 text-xs text-muted transition hover:border-accent hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
+                onclick={() => zcsRow && onReadZcsFromSg(zcsRow)}
+                disabled={reading || zcsRow === null || !zcsRow.cabd}
+                title={zcsRow
+                  ? `Read raw ZCS + VIN from ${zcsRow.sgName} via ${zcsRow.sgbd} (${zcsRow.cabd}.IPO)`
+                  : `${g.sgbd} has no ZCS-master personality in SGFAM`}
               >
-                {activeSgName === row.sgName ? "Reading…" : "Read ZCS"}
+                {activeOnThisGroup && activeSgName === zcsRow?.sgName ? "Reading…" : "Read ZCS"}
               </button>
-            </li>
-          {/each}
-        </ul>
-        <p class="mt-2 text-xs text-faint italic">
-          ZCS read returns raw bytes; SA bit-set decoding via
-          <span class="font-mono">{app.chassis?.code}ZST.*</span> is pending — see
-          <span class="font-mono">docs/assumptions.md</span> A6.
-        </p>
-      {/if}
+            </span>
+          </li>
+        {/each}
+      </ul>
     {/if}
   {/if}
 </section>
