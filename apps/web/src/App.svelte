@@ -1,7 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getLogger } from "@emdzej/bimmerz-logger";
   import { parseTranslationsCsv } from "@emdzej/ncsx-translations";
   import { app } from "./lib/state.svelte";
+
+  const log = getLogger("NCSX.web");
   import InstallPicker from "./components/InstallPicker.svelte";
   import ChassisList from "./components/ChassisList.svelte";
   import ModuleList from "./components/ModuleList.svelte";
@@ -25,7 +28,7 @@
       app.translations = parseTranslationsCsv(await res.text());
     } catch (err) {
       // Translations are nice-to-have, not required. Log to console and move on.
-      console.warn("[ncsx-web] failed to load translations.csv:", err);
+      log.warn({ err }, "failed to load translations.csv");
     }
   });
 

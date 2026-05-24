@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-wire",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shared EdiabasLike type contract — minimal Ediabas-shape that ncsx packages consume without hard-depending on @emdzej/ediabasx-ediabas.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

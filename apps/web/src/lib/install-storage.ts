@@ -17,6 +17,10 @@
  * of the database to `ncsx-web` so the two apps coexist without colliding.
  */
 
+import { getLogger } from "@emdzej/bimmerz-logger";
+
+const log = getLogger("NCSX.web.install-storage");
+
 const DB_NAME = "ncsx-web";
 const DB_VERSION = 1;
 const STORE_NAME = "install";
@@ -60,7 +64,7 @@ export async function saveInstallHandle(
     });
     db.close();
   } catch (err) {
-    console.warn("[ncsx-web/install-storage] save failed:", err);
+    log.warn({ err }, "save failed");
   }
 }
 
@@ -80,7 +84,7 @@ export async function loadInstallHandle(): Promise<FileSystemDirectoryHandle | n
     db.close();
     return handle;
   } catch (err) {
-    console.warn("[ncsx-web/install-storage] load failed:", err);
+    log.warn({ err }, "load failed");
     return null;
   }
 }
@@ -96,7 +100,7 @@ export async function clearInstallHandle(): Promise<void> {
     });
     db.close();
   } catch (err) {
-    console.warn("[ncsx-web/install-storage] clear failed:", err);
+    log.warn({ err }, "clear failed");
   }
 }
 

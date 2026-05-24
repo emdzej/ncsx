@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-property-formulas",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Per-FSW property-value decoders, ported from NCS Dummy's Classes/Formulas/Formulas.cs. Renders raw CABD bytes as human-readable values (km/h, °C, V, percentages, …).",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -14,7 +14,10 @@
   import { buildOptionList } from "@emdzej/ncsx-options";
   import { evalAuftragsausdruck } from "@emdzej/ncsx-predicate";
   import { faToAsw } from "@emdzej/ncsx-fa-asw";
+  import { getLogger } from "@emdzej/bimmerz-logger";
   import { app } from "../lib/state.svelte";
+
+  const log = getLogger("NCSX.web.function-tree");
   import { connection } from "../lib/ediabas-session.svelte";
   import {
     processReadCoding,
@@ -848,7 +851,7 @@
         }
       })
       .catch((err: unknown) => {
-        console.warn("[FunctionTree] JOB_ERMITTELN failed:", err);
+        log.warn({ err }, "JOB_ERMITTELN failed");
       });
   });
 

@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { getLogger } from "@emdzej/bimmerz-logger";
   import { loadChassis } from "@emdzej/ncsx-chassis";
   import { app } from "../lib/state.svelte";
+
+  const log = getLogger("NCSX.web.chassis-list");
 
   /**
    * Per-subsystem badges shown above the chassis grid so the user can tell at
@@ -24,7 +27,7 @@
     app.busy = true;
     try {
       app.chassis = await loadChassis(app.install.datenSource, code, {
-        onWarning: (w) => console.warn(`[chassis ${code}]`, w),
+        onWarning: (w) => log.warn({ code, warning: w }, "chassis-load warning"),
       });
       app.view = "browse-modules";
     } catch (err) {

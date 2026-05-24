@@ -33,6 +33,16 @@ import {
 } from './error-codes.js';
 import type { CdhContext, CdhResult } from './types.js';
 import { tokenizeFa } from '@emdzej/ncsx-fa-asw';
+import { getLogger } from '@emdzej/bimmerz-logger';
+
+// Diagnostic logger for the CDH dispatch tap. Every CDH* call site
+// can route through `log.debug({...}, "msg")` — visibility is then
+// controlled centrally via `configureLogger({ categories: {
+// 'NCSX.cabi-provider': 'debug' } })`. Pre-migration (0.2.x) these
+// were unconditional `console.log` calls that flooded the browser
+// console; the move to category-gated `log.debug` keeps the traces
+// available on demand without polluting normal use.
+const log = getLogger('NCSX.cabi-provider');
 
 /** Lowercase hex → bytes. Tolerates any 2-char-per-byte hex. */
 function bytesToHex(bytes: Uint8Array): string {
@@ -252,7 +262,7 @@ export class CabiProvider {
       // console can be diffed against NCSEXPER's ABLAUF.TRC when a
       // job hits an unexpected error path. Remove when the write
       // flow stabilises.
-      console.log(
+      log.debug(
         `[CDHapiJob] ecu=${ecu} job=${job} params(${params.length})=[${params.map((p) => JSON.stringify(p)).join(", ")}]`,
       );
       const sets = await this.ctx.ediabas.executeJob(job, { params });
@@ -281,7 +291,7 @@ export class CabiProvider {
         }
         return `set[${i}]{${entries.join(', ')}}`;
       });
-      console.log(
+      log.debug(
         `[CDHapiJob] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${sets.length} ${setsSummary.join(' | ')}`,
       );
       return { retVal: COAPI_OK };
@@ -289,10 +299,7 @@ export class CabiProvider {
       // EDIABAS layer threw — typically a transport / SGBD-load failure. Stash
       // an error breadcrumb on jobStatus so a follow-up CDHapiCheckJobStatus
       // doesn't see a stale OK from a previous job.
-      console.error(
-        `[CDHapiJob] ← job=${job} EXCEPTION:`,
-        err,
-      );
+      log.error({ err }, `[CDHapiJob] ← job=${job} EXCEPTION`);
       this.lastJob = {
         sets: [],
         jobStatus: err instanceof Error ? err.message : String(err),
@@ -312,11 +319,11 @@ export class CabiProvider {
   ): Promise<CdhResult<{ resultText: string }>> {
     const v = this.findResultInSet(apiResult, apiSet);
     if (v === undefined) {
-      console.log(`[CDHapiResultText] ${apiResult}[set=${apiSet}] → MISSING`);
+      log.debug(`[CDHapiResultText] ${apiResult}[set=${apiSet}] → MISSING`);
       return { retVal: COAPI_ERROR };
     }
     const out = typeof v === 'string' ? v : String(v);
-    console.log(`[CDHapiResultText] ${apiResult}[set=${apiSet}] → ${JSON.stringify(out)}`);
+    log.debug(`[CDHapiResultText] ${apiResult}[set=${apiSet}] → ${JSON.stringify(out)}`);
     return { retVal: COAPI_OK, out: { resultText: out } };
   }
 
@@ -327,15 +334,15 @@ export class CabiProvider {
   ): Promise<CdhResult<{ resultVal: number }>> {
     const v = this.findResultInSet(apiResult, apiSet);
     if (v === undefined) {
-      console.log(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → MISSING`);
+      log.debug(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → MISSING`);
       return { retVal: COAPI_ERROR };
     }
     const n = typeof v === 'number' ? v : Number(v);
     if (!Number.isFinite(n)) {
-      console.log(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → NOT_FINITE(${String(v)})`);
+      log.debug(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → NOT_FINITE(${String(v)})`);
       return { retVal: COAPI_ERROR };
     }
-    console.log(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → ${n}`);
+    log.debug(`[CDHapiResultInt] ${apiResult}[set=${apiSet}] → ${n}`);
     return { retVal: COAPI_OK, out: { resultVal: n } };
   }
 
@@ -346,11 +353,11 @@ export class CabiProvider {
   ): Promise<CdhResult<{ resultVal: boolean }>> {
     const v = this.findResultInSet(apiResult, apiSet);
     if (v === undefined) {
-      console.log(`[CDHapiResultDigital] ${apiResult}[set=${apiSet}] → MISSING`);
+      log.debug(`[CDHapiResultDigital] ${apiResult}[set=${apiSet}] → MISSING`);
       return { retVal: COAPI_ERROR };
     }
     const out = Boolean(v);
-    console.log(`[CDHapiResultDigital] ${apiResult}[set=${apiSet}] → ${out}`);
+    log.debug(`[CDHapiResultDigital] ${apiResult}[set=${apiSet}] → ${out}`);
     return { retVal: COAPI_OK, out: { resultVal: out } };
   }
 
@@ -361,15 +368,15 @@ export class CabiProvider {
   ): Promise<CdhResult<{ resultVal: number }>> {
     const v = this.findResultInSet(apiResult, apiSet);
     if (v === undefined) {
-      console.log(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → MISSING`);
+      log.debug(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → MISSING`);
       return { retVal: COAPI_ERROR };
     }
     const n = typeof v === 'number' ? v : Number(v);
     if (!Number.isFinite(n)) {
-      console.log(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → NOT_FINITE(${String(v)})`);
+      log.debug(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → NOT_FINITE(${String(v)})`);
       return { retVal: COAPI_ERROR };
     }
-    console.log(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → ${n}`);
+    log.debug(`[CDHapiResultAnalog] ${apiResult}[set=${apiSet}] → ${n}`);
     return { retVal: COAPI_OK, out: { resultVal: n } };
   }
 
@@ -629,7 +636,7 @@ export class CabiProvider {
     // wortBreite, wordCount, wireAddr, payload, terminator) can be
     // inspected. Crucial for diffing SCHREIBEN/AUFTRAG/CHECKSUM
     // bytes against what NCSEXPER would have shipped.
-    console.log(
+    log.debug(
       `[CDHapiJobData] ecu=${ecu} job=${job} bufHandle=${bufHandle} buf.size=${buf.size} bytes=${bytesToHex(para)}`,
     );
     try {
@@ -660,7 +667,7 @@ export class CabiProvider {
         }
         return `set[${i}]{${entries.join(', ')}}`;
       });
-      console.log(
+      log.debug(
         `[CDHapiJobData] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${sets.length} ${setsSummary.join(' | ')}`,
       );
       return { retVal: COAPI_OK };
@@ -668,10 +675,7 @@ export class CabiProvider {
       // When ediabasx's BEST2 interpreter throws, the stack is the
       // most useful diagnostic — log it before swallowing into
       // jobStatus.
-      console.error(
-        `[CDHapiJobData] ← job=${job} EXCEPTION:`,
-        err,
-      );
+      log.error({ err }, `[CDHapiJobData] ← job=${job} EXCEPTION`);
       this.lastJob = {
         sets: [],
         jobStatus: err instanceof Error ? err.message : String(err),
@@ -754,7 +758,7 @@ export class CabiProvider {
     const maxBytes = maxRecords * wortBreite;
     // Diagnostic: log the per-call maxData/wortBreite so we can see
     // what the IPO is asking for and verify our chunking math.
-    console.log(
+    log.debug(
       `[CDHGetApiJobData] startAddr=0x${startAddr.toString(16)} maxData=${maxData} → maxRecords=${maxRecords} (WB=${wortBreite})`,
     );
     let endCursor = this.slotCursor + 1;
@@ -1052,7 +1056,7 @@ export class CabiProvider {
 
   async CDHSetCabdPar(bezeichner: string, wert: string): Promise<CdhResult> {
     this.cabdPars.set(bezeichner, wert);
-    console.log(`[CDHSetCabdPar] ${bezeichner} = ${JSON.stringify(wert)}`);
+    log.debug(`[CDHSetCabdPar] ${bezeichner} = ${JSON.stringify(wert)}`);
     return { retVal: COAPI_OK };
   }
 
@@ -1063,7 +1067,7 @@ export class CabiProvider {
 
   async CDHSetCabdWordPar(bezeichner: string, wert: number): Promise<CdhResult> {
     this.cabdPars.set(bezeichner, wert | 0);
-    console.log(`[CDHSetCabdWordPar] ${bezeichner} = ${wert | 0}`);
+    log.debug(`[CDHSetCabdWordPar] ${bezeichner} = ${wert | 0}`);
     return { retVal: COAPI_OK };
   }
 

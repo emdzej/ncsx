@@ -28,6 +28,7 @@
  * for the planned CABI surface.
  */
 
+import { getLogger } from "@emdzej/bimmerz-logger";
 import { parseIpo } from "@emdzej/inpax-parser";
 import { VM, MainScheduler } from "@emdzej/inpax-interpreter";
 import { type FunctionBlock } from "@emdzej/inpax-core";
@@ -47,6 +48,8 @@ import { EdiabasXProvider, Inp1Adapter } from "@emdzej/inpax-ediabasx-provider";
 import { Ediabas, type EdiabasConfig } from "@emdzej/ediabasx-ediabas";
 import { app } from "./state.svelte";
 import { connection } from "./ediabas-session.svelte";
+
+const log = getLogger("NCSX.web.runtime");
 
 export interface RuntimeHandle {
   /** The CABD module name this runtime is bound to (e.g. `A_AKMB46`). */
@@ -241,7 +244,7 @@ export async function startNcsRuntime(
   const scheduler = new MainScheduler(vm, { tickInterval: 50, debug: false });
   scheduler.start();
   const startupPromise = vm.run().catch((err: unknown) => {
-    console.error(`[ncsx-runtime/${cabdBasename}] VM startup error:`, err);
+    log.error({ err, cabd: cabdBasename }, "VM startup error");
   });
 
   // 8. cabimain runner. NCSEXPER's MFC UI calls into the IPO with the job

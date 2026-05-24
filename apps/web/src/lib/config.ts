@@ -20,6 +20,49 @@ export type InterfaceType = "webserial" | "gateway";
 export type SerialProtocol = "uart" | "kwp" | "isotp" | "tp20";
 export type SerialInitMode = "fast" | "five-baud";
 
+/**
+ * One of the bimmerz-logger levels. Inlined here (rather than imported
+ * from `@emdzej/bimmerz-logger`) so this file stays a pure config-
+ * shape definition with no library dependency — the wiring layer in
+ * `main.ts` and `logger-wiring.ts` is what actually pulls in
+ * bimmerz-logger.
+ */
+export type LogLevel =
+  | "trace"
+  | "debug"
+  | "info"
+  | "warn"
+  | "error"
+  | "fatal"
+  | "silent";
+
+export const LOG_LEVELS: readonly LogLevel[] = [
+  "trace",
+  "debug",
+  "info",
+  "warn",
+  "error",
+  "fatal",
+  "silent",
+];
+
+/**
+ * Persisted logger configuration. Mirrors `@emdzej/bimmerz-logger`'s
+ * `LoggerConfig` minus the sink (the web app always uses the console
+ * sink — no Node-style pino transport surface in the browser).
+ *
+ * Keys (category names) are dot-separated paths from `LOG_CATEGORIES`
+ * exports — `@emdzej/ncsx-chassis`'s NCSX.* tree plus the bundled
+ * `@emdzej/inpax-interpreter` INPAX.* tree plus
+ * `@emdzej/ediabasx-ediabas` EDIABASX.* tree. The Settings dialog
+ * iterates the union, so adding a category in any upstream library
+ * automatically shows up here.
+ */
+export interface WebLoggerConfig {
+  level?: LogLevel;
+  categories?: Record<string, LogLevel>;
+}
+
 export interface WebConfig {
   interface: InterfaceType;
   serial?: {
@@ -47,6 +90,8 @@ export interface WebConfig {
      */
     url?: string;
   };
+  /** Logger settings — applied via `configureLogger()` at boot + on Settings save. */
+  logging?: WebLoggerConfig;
 }
 
 const STORAGE_KEY = "ncsx.web.config.v1";
@@ -69,6 +114,9 @@ const DEFAULT_CONFIG: WebConfig = {
   },
   gateway: {
     url: "ws://localhost:6801",
+  },
+  logging: {
+    level: "info",
   },
 };
 

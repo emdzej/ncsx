@@ -35,11 +35,14 @@
  * something off the stack (which currently nothing does, but might).
  */
 
+import { getLogger } from "@emdzej/bimmerz-logger";
 import {
   Stack,
   type ExecutionContext,
   type VM,
 } from "@emdzej/inpax-interpreter";
+
+const log = getLogger("NCSX.web.cabi-syscalls");
 import {
   ValueType,
   type StackEntry,
@@ -179,7 +182,7 @@ export function buildCabiSystemFunctions(
       count++;
       slotHits.set(slot.id, (slotHits.get(slot.id) ?? 0) + 1);
       if (count <= TRACE_FIRST) {
-        console.log(`[cabi-syscall #${count}] ${slot.name} (0x${slot.id.toString(16)})`);
+        log.debug({ count, slot: slot.name, id: slot.id }, "cabi-syscall");
       }
       if (count > SAFETY_CAP) {
         const top = topHits(slotHits, slotNames, 8);
@@ -191,8 +194,9 @@ export function buildCabiSystemFunctions(
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
       if (count % HISTOGRAM_INTERVAL === 0) {
-        console.warn(
-          `[cabi-syscall] ${count} calls so far — top: ${topHits(slotHits, slotNames, 8)}`,
+        log.warn(
+          { count, top: topHits(slotHits, slotNames, 8) },
+          "cabi-syscall histogram tick",
         );
       }
       await raw(ctx, vm);
@@ -231,7 +235,7 @@ function makeOverride(
         try {
           await cabi.CDHapiJob(ecu, job, para, result);
         } catch (err) {
-          console.error(`[apiJob] ${ecu}/${job} failed:`, err);
+          log.error({ err, ecu, job }, "apiJob failed");
           throw err;
         }
       };
@@ -255,7 +259,7 @@ function makeOverride(
         try {
           await cabi.CDHapiJobData(ecu, job, Number(args.BufHandle) | 0, Number(args.BufSize) | 0, String(args.result));
         } catch (err) {
-          console.error(`[apiJobData] ${ecu}/${job} failed:`, err);
+          log.error({ err, ecu, job }, "apiJobData failed");
           throw err;
         }
       };
@@ -864,8 +868,9 @@ function makeOverride(
       // a real IPO is hitting that we missed.
       return (ctx) => {
         popArgs(ctx, slot.params);
-        console.warn(
-          `[cabi-syscall] slot 0x${slot.id.toString(16)} (${slot.name}) — no override registered, popped args + no-op`,
+        log.warn(
+          { id: slot.id, slot: slot.name },
+          "no override registered, popped args + no-op",
         );
       };
   }

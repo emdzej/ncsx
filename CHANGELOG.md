@@ -4,6 +4,67 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.0 — 2026-05-24
+
+Logger migration onto `@emdzej/bimmerz-logger` — matches the
+ediabasx 0.3.0 + inpax 0.7.0 cut-overs. The Settings dialog now
+exposes the combined `NCSX.*` + `INPAX.*` + `EDIABASX.*` category
+catalogue (sourced from each library's `LOG_CATEGORIES` export) so a
+single panel controls log levels across all three subsystems the
+web app embeds.
+
+### Changed (breaking)
+
+- **`@emdzej/ediabasx-*` deps bumped to `^0.3.0`**, picking up the
+  ediabasx logger migration + the new modal Run-job arg dialog +
+  `LOG_CATEGORIES` export.
+- **`@emdzej/inpax-*` deps bumped to `^0.7.0`**, picking up the
+  inpax logger migration + its `LOG_CATEGORIES` export.
+- **No more direct `console.*` calls in the runtime code path.**
+  Lifecycle traces, dispatcher logs, install-storage warnings, and
+  every other diagnostic now route through bimmerz-logger
+  categories — by default invisible at the standard `info` level,
+  visible when the user opts into trace/debug via Settings.
+
+### Added
+
+- **`@emdzej/bimmerz-logger@^0.1.2`** added as a peer dep in
+  library packages (`@emdzej/ncsx-chassis`,
+  `@emdzej/ncsx-inpax-cabi-provider`) and a regular dep in
+  `@emdzej/ncsx-web`.
+- **Hierarchical `NCSX.*` categories.** Every internal `getLogger()`
+  call uses one of:
+  - `NCSX` — catch-all
+  - `NCSX.cabi-provider` — CDH* dispatch tap
+  - `NCSX.web` — top-level web app (translations etc.)
+  - `NCSX.web.pwa` — service-worker lifecycle
+  - `NCSX.web.runtime` — per-module IPO runtime startup
+  - `NCSX.web.process-ecu` — read / write coding lifecycle
+  - `NCSX.web.cabi-syscalls` — per-slot CABI syscall dispatch traces
+  - `NCSX.web.install-storage` — IndexedDB persistence warnings
+  - `NCSX.web.chassis-list` — chassis-load warnings
+  - `NCSX.web.ecu-list` — FA→ASW resolution warnings
+  - `NCSX.web.function-tree` — JOB_ERMITTELN enumeration warnings
+- **`@emdzej/ncsx-chassis` exports `LOG_CATEGORIES`** —
+  catalogue iterable from consuming apps so Settings UIs don't
+  hardcode category names. Drives the ncsx-web Settings panel
+  alongside `@emdzej/inpax-interpreter`'s and
+  `@emdzej/ediabasx-ediabas`'s catalogues.
+- **ncsx-web Settings — Logging section.** Default-level dropdown
+  plus per-category override picker, sourced from all three
+  upstream library catalogues unioned together. Changes apply
+  immediately at runtime — handles are proxies; every cached
+  logger picks up new settings on its next emit.
+- **`logger-wiring.ts`** in `apps/web/src/lib/` — small helper that
+  validates the persisted `WebLoggerConfig` (catches corrupted
+  localStorage entries) and feeds it to `configureLogger()`.
+  Applied at boot from `main.ts` so component-init log calls land
+  at the user's chosen level.
+
+### Internal
+
+- All ncsx packages bumped to **0.3.0** in lockstep.
+
 ## 0.2.0 — 2026-05-23
 
 NCSDummy-equivalent UI surface plus a shareable patch format, riding on top of

@@ -106,6 +106,22 @@ anyone parsing BMW's data formats — no dependency on the web app.
 |---|---|
 | [`@emdzej/ncsx-web`](apps/web) | The browser SPA at `ncsx.bimmerz.app`. Pure client-side: Svelte 5 + Vite + Tailwind. |
 
+## Logging
+
+Powered by [`@emdzej/bimmerz-logger`](https://github.com/emdzej/bimmerz/tree/main/packages/logger).
+The web app's Settings dialog has a Logging section with a
+default-level dropdown plus per-category overrides covering all
+three subsystems this app embeds:
+
+- `NCSX.*` — chassis loader, CABI provider, web app surface (from `@emdzej/ncsx-chassis`).
+- `INPAX.*` — IPO interpreter (from `@emdzej/inpax-interpreter`).
+- `EDIABASX.*` — BEST/2 interpreter (from `@emdzej/ediabasx-ediabas`).
+
+Levels are hierarchical — a rule for `EDIABASX` covers every
+`EDIABASX.*` subcategory unless something more specific matches.
+Changes take effect immediately (logger handles are proxies, no
+component reload needed).
+
 ## Develop
 
 ```bash

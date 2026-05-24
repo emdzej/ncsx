@@ -27,12 +27,15 @@
  * internals.
  */
 
+import { getLogger } from "@emdzej/bimmerz-logger";
 import { buildFunctionList, type FunctionList } from "@emdzej/ncsx-function-list";
 import type { Chassis } from "@emdzej/ncsx-chassis";
 import { formatFahrgestellNr } from "@emdzej/ncsx-identity";
 import type { SgfamRow } from "@emdzej/ncsx-text-tables";
 import { app } from "./state.svelte";
 import { startNcsRuntime } from "./runtime.svelte";
+
+const log = getLogger("NCSX.web.process-ecu");
 
 export interface ProcessEcuResult {
   ok: boolean;
@@ -177,7 +180,7 @@ export async function processEcu(
     .catch((err: unknown) => {
       // Non-fatal — the explicit Read/Apply buttons still work even
       // without the enumerated list.
-      console.warn("[processEcu] JOB_ERMITTELN failed:", err);
+      log.warn({ err }, "JOB_ERMITTELN failed");
     });
 
   return {
@@ -453,8 +456,17 @@ export async function processWriteCoding(
       : "<empty>";
   const nonZeroSlots = slots.filter((s) => (s.value ?? 0) !== 0).length;
   const maxSlotAddr = slots.length > 0 ? slots[slots.length - 1]!.addr : 0;
-  console.log(
-    `[processWriteCoding] coding=${codingRange} · slots=${slots.length} (non-zero=${nonZeroSlots}, addr range 0x${slots[0]?.addr.toString(16) ?? "?"}..0x${maxSlotAddr.toString(16)}) · pendingNetto.length=${pendingNetto.length} · deliveryState.length=${functionList.deliveryState.length}`,
+  log.debug(
+    {
+      codingRange,
+      slots: slots.length,
+      nonZeroSlots,
+      addrStart: slots[0]?.addr,
+      addrEnd: maxSlotAddr,
+      pendingNettoLen: pendingNetto.length,
+      deliveryStateLen: functionList.deliveryState.length,
+    },
+    "processWriteCoding",
   );
 
   if (slots.length === 0) {

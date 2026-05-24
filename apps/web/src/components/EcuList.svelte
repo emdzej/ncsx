@@ -1,10 +1,13 @@
 <script lang="ts">
   import type { SgfamRow } from "@emdzej/ncsx-text-tables";
+  import { getLogger } from "@emdzej/bimmerz-logger";
   import { faToAsw } from "@emdzej/ncsx-fa-asw";
   import { selectEcus } from "@emdzej/ncsx-ecu-select";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
   import { processEcu, formatCi } from "../lib/process-ecu";
+
+  const log = getLogger("NCSX.web.ecu-list");
 
   /**
    * Per-row state — what's happening with each SGFAM entry. Keyed by
@@ -60,7 +63,7 @@
       const selected = selectEcus(app.chassis, asw);
       for (const sg of selected) out.add(sg.umrsg);
     } catch (err) {
-      console.warn("[EcuList] FA→ASW resolution failed:", err);
+      log.warn({ err }, "FA→ASW resolution failed");
     }
     return out;
   });

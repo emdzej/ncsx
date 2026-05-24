@@ -2,6 +2,18 @@ import "./app.css";
 import App from "./App.svelte";
 import { mount } from "svelte";
 import { registerSW } from "virtual:pwa-register";
+import { getLogger } from "@emdzej/bimmerz-logger";
+import { loadConfig } from "./lib/config";
+import { applyLoggerConfig } from "./lib/logger-wiring";
+
+// Apply the persisted bimmerz-logger config before mount so component-
+// init log calls land at the user's chosen level / categories. The
+// Settings dialog re-applies on change — handles are proxies, so
+// existing logger handles pick up new config instantly on the next
+// emit, no component refresh needed.
+applyLoggerConfig(loadConfig().logging);
+
+const log = getLogger("NCSX.web.pwa");
 
 const target = document.getElementById("app");
 if (!target) {
@@ -14,13 +26,9 @@ mount(App, { target });
 // reload — no user-facing prompt needed.
 registerSW({
   onRegisteredSW(swUrl) {
-    if (typeof console !== "undefined") {
-      console.info(`[pwa] service worker registered at ${swUrl}`);
-    }
+    log.info({ swUrl }, "service worker registered");
   },
   onOfflineReady() {
-    if (typeof console !== "undefined") {
-      console.info("[pwa] offline-ready");
-    }
+    log.info("offline-ready");
   },
 });
