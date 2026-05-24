@@ -272,18 +272,20 @@ export async function startNcsRuntime(
       );
     }
     // Per-dispatch cabd-par seeding — mirrors NCSEXPER's
-    // FUN_00402c70:
-    //   1. coapiResetCabdPars() — wipe the CMapStringToString.
+    // dispatchUserJob (FUN_00402c70):
+    //   1. coapiClearCabdParsKeepApp() — wipe the CMapStringToString
+    //      but restore APPLIKATION afterwards.
     //   2. Push job-specific keys from CDocument fields (typed host
     //      state) into the freshly-empty map.
-    //   3. Dispatch cabimain.
+    //   3. Dispatch via coapiRunCabd("…", cabdHandle, 0) — which
+    //      writes JOBNAME into the same map and runs cabimain.
     //
     // Step (1) is implicit for us: every `startNcsRuntime` call
     // constructs a brand-new CabiProvider with an empty cabdPars
     // Map, so the dispatch already starts clean. Step (2) is the
     // mapping below — job-keyed reads from `app.identity` and
     // `app.chassis`. NCSEXPER's anchor is the inline strcmp
-    // chain in FUN_00402c70 (PC 0x402d25 / 0x402e65 / 0x402ec5).
+    // chain in dispatchUserJob (PC 0x402d25 / 0x402e65 / 0x402ec5).
     //
     // Wipe the per-session error scratchpad before dispatching. The
     // IPO's `__inpa_startup__` / cabimain prologue installs a
@@ -297,20 +299,27 @@ export async function startNcsRuntime(
     // `C_S_LESEN` runs).
     await cabi.CDHResetError();
 
-    // APPLIKATION is the one key NCSEXPER preserves across resets
-    // (FUN_0044b880 saves → RemoveAll → restores). We re-seed it
-    // unconditionally here since there's no preserved-across-reset
-    // channel; the chassis code is the natural value.
+    // APPLIKATION is the one key NCSEXPER preserves across the
+    // dispatchUserJob reset (cabdParsClearKeepApp_impl saves it →
+    // RemoveAll → restores). We re-seed it unconditionally since
+    // there's no preserved-across-reset channel; the chassis code
+    // is the natural value.
+    //
+    // Caveat: NCSEXPER's FA_WRITE path actually wipes APPLIKATION a
+    // second time (coapiWriteAuftrag calls coapiResetCabdPars on its
+    // resolved CABD handle before seeding FA_STREAM), so under the
+    // real binary APPLIKATION is absent when cabimain("FA_WRITE")
+    // runs. Re-seeding here is defensive — harmless if the IPO
+    // ignores it, useful if it doesn't.
     if (app.chassis?.code) {
       await cabi.CDHSetCabdPar("APPLIKATION", app.chassis.code);
     }
     // FAHRGESTELL_NR — seeded only for FGNR_SCHREIBEN, matching
-    // FUN_00402c70's per-job branch. The VIN gets the BMW Mod-36
+    // dispatchUserJob's per-job branch. The VIN gets the BMW Mod-36
     // check character appended (formatFahrgestellNr port of
-    // coapiSetFgNr's CalcMod36CheckSum). Other jobs that need the
-    // VIN (SG_CODIEREN's post-write C_FG_AUFTRAG, FA_WRITE's
-    // FA-bytes channel) read it from `systemData`, not cabd-pars
-    // — different IPC path inside the IPO.
+    // coapiSetFgNr's CalcMod36CheckSum). The IPO ultimately ships
+    // the encoded VIN through the SGBD's `C_FG_AUFTRAG` job
+    // (via CDHapiJob / CDHapiJobData depending on the dispatcher).
     if (jobName === "FGNR_SCHREIBEN" && app.identity?.vin) {
       await cabi.CDHSetCabdPar(
         "FAHRGESTELL_NR",
@@ -318,7 +327,17 @@ export async function startNcsRuntime(
       );
     }
     // ZCS_SCHREIBEN — seed GM/SA/VN keys from the cached ZCS read.
-    // Matches the three coapiSetCabdPar calls at PC 0x402d2f..0x402d5d.
+    // Matches the three coapiSetCabdPar calls at PC 0x402d2f..0x402d5d
+    // in dispatchUserJob.
+    //
+    // IPO-side (A_KMB46.ipo on E46): cabimain's ZCS_SCHREIBEN branch
+    // dispatches to the unified `Cod` user-function — shared with
+    // SG_CODIEREN / TEILBEREICH_CODIEREN / FGNR_SCHREIBEN /
+    // ZCS_LOESCHEN. `Cod` reads current coding via C_S_LESEN, builds
+    // the new ZCS bytes from the seeded GM/SA/VN, and ships them via
+    // `CDHapiJobData(sgbd, "C_S_AUFTRAG", bytes, len, "")`. The SGBD
+    // side handles `C_S_AUFTRAG` as the universal write-with-order
+    // job — same one used for FGNR_SCHREIBEN / ZCS_LOESCHEN.
     if (jobName === "ZCS_SCHREIBEN" && app.identity?.zcs) {
       const zcs = app.identity.zcs;
       await cabi.CDHSetCabdPar("GM_SCHLUESSEL", zcs.gm);
@@ -327,10 +346,15 @@ export async function startNcsRuntime(
     }
     // FA_WRITE — NCSEXPER's coapiWriteAuftrag (FUN_0042f9c0) seeds
     // the raw FA token string as the `FA_STREAM` cabd-par before
-    // dispatching the IPO. The IPO then reads it via
-    // `CDHGetCabdPar("FA_STREAM")`, converts to bytes (typically
-    // through the FA.PRG `FA_STREAM2STRUCT` job), and ships via
-    // `apiJobData(sgbd, "FA_SCHREIBEN", …)`.
+    // dispatching the IPO. The IPO then:
+    //   1. CDHGetCabdPar("FA_STREAM") → FA token string
+    //   2. Build a CSV input (e.g. "1;02;<faText>;…")
+    //   3. CDHapiJob("FA", "FA_STREAM_FOR_ECU", csv, "")
+    //      — invokes FA.PRG (the BMW-shipped meta-SGBD) to convert
+    //      FA tokens → binary FA bytes
+    //   4. CDHapiResultText("FA_STREAM_FOR_ECU", 1) → binary FA hex
+    //   5. CDHapiJob(targetSgbd, "C_FA_AUFTRAG", binaryFaHex, "")
+    //      — THE ACTUAL WRITE on the target ECU's SGBD
     //
     // The typed FA-walker channel — `fa:` passed to the CabiProvider
     // constructor, surfaced via `CDHGetFaVersion` /
