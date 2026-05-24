@@ -4,6 +4,55 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.1 — 2026-05-24
+
+Identity-panel UX rework + a Ghidra-verified rewrite of the FA / ZCS
+write-path commentary.
+
+### Changed
+
+- **Identity panel exposes FA + ZCS per ECU, not per role.** The same
+  physical ECU often appears in SGFAM as two rows under the same
+  SGBD with different CABDs — one with FA=1, one with ZCS=1 (E46
+  `AKMB`/`KMB` → `C_KMB46`; `ALSZ`/`LSZ` → `C_LSZA`). The panel now
+  groups identity-master rows by SGBD and shows both Read FA / Read
+  ZCS buttons on the same ECU row; whichever personality SGFAM
+  doesn't declare is disabled with an explanatory tooltip.
+- **`VehicleIdentity.source` → `faSource` / `zcsSource`.** Each
+  payload tracks the SGFAM row it was read from independently, so
+  the FA editor dispatches `FA_WRITE` against the FA-master CABD
+  and the ZCS editor dispatches `ZCS_SCHREIBEN` against the
+  ZCS-master CABD — even when both reads happened on the same SGBD.
+  Reads merge into existing identity instead of replacing it.
+
+### Documentation
+
+- **runtime.svelte.ts comments rewritten.** Traced the full
+  `FA_WRITE` / `ZCS_SCHREIBEN` chain through NCSEXPER in Ghidra and
+  the corresponding `cabimain` handlers in `A_AKMB46.ipo` /
+  `A_KMB46.ipo`. Fixed several misleading claims:
+  - The IPO ships FA writes via `CDHapiJob(sgbd, "C_FA_AUFTRAG", …)`
+    after FA.PRG's `FA_STREAM_FOR_ECU` job converts the FA token
+    string to binary — *not* via the previously-claimed
+    `apiJobData(sgbd, "FA_SCHREIBEN", …)`. `FA_SCHREIBEN` doesn't
+    exist in NCSEXPER's string table or the IPO.
+  - `ZCS_SCHREIBEN` (and `FGNR_SCHREIBEN` / `ZCS_LOESCHEN`) go
+    through the IPO's unified `Cod` handler which calls
+    `CDHapiJobData(sgbd, "C_S_AUFTRAG", bytes, len, "")` — the
+    universal write-with-order SGBD job.
+  - Renamed NCSEXPER reverse-engineering function references in
+    comments to match the Ghidra symbol updates (`FUN_00402c70` →
+    `dispatchUserJob`, `FUN_0044b880` → `cabdParsClearKeepApp_impl`,
+    etc.).
+  - Clarified that `coapiWriteAuftrag`'s inner cabd-par reset
+    wipes the outer `cabdParsClearKeepApp` reset's preserved
+    APPLIKATION key, so re-seeding APPLIKATION per-call (as we do)
+    is defensive rather than bit-for-bit mirroring NCSEXPER.
+
+No runtime-behaviour change — the host-side cabd-par seeding
+(`FA_STREAM` / `GM_/SA_/VN_SCHLUESSEL` / `JOBNAME`) was already
+correct, only the comments around it were wrong.
+
 ## 0.3.0 — 2026-05-24
 
 Logger migration onto `@emdzej/bimmerz-logger` — matches the
