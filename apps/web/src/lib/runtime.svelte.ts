@@ -83,8 +83,14 @@ export interface RuntimeHandle {
 /**
  * Resolve `<install>/NCSEXPER/SGDAT/<basename>.IPO` to bytes. Case-insensitive on
  * the filename — installs synced from Windows often mix `.ipo` and `.IPO`.
+ *
+ * Exported so write-dialog target-resolvers can probe an IPO for
+ * jobname-dispatch support without booting the full VM. Cheap byte
+ * read + string search is enough to answer "does this IPO handle
+ * FGNR_SCHREIBEN / FA_WRITE / ZCS_SCHREIBEN?" — the jobname appears
+ * as a string constant in any cabimain that dispatches it.
  */
-async function loadIpoBytes(basename: string): Promise<Uint8Array> {
+export async function loadIpoBytes(basename: string): Promise<Uint8Array> {
   if (!app.install?.ncsSgdat) {
     throw new Error("No NCSEXPER/SGDAT directory in the picked install");
   }

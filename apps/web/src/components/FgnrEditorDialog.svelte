@@ -21,21 +21,14 @@
    */
   import { untrack } from "svelte";
   import { buildSlotsFromValues } from "@emdzej/ncsx-coder";
-  import { formatFahrgestellNr, mod36Checksum } from "@emdzej/ncsx-identity";
+  import { mod36Checksum } from "@emdzej/ncsx-identity";
   import { buildFunctionList } from "@emdzej/ncsx-function-list";
   import type { SgfamRow } from "@emdzej/ncsx-text-tables";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
-  import { startNcsRuntime } from "../lib/runtime.svelte";
+  import { loadIpoBytes, startNcsRuntime } from "../lib/runtime.svelte";
   import { findPhysicalModule, formatCi } from "../lib/process-ecu";
-
-  // Per-ECU write status. Tracked separately from the targets list
-  // so the same ECU can be retried after a failure.
-  type WriteStatus =
-    | { kind: "pending" }
-    | { kind: "writing" }
-    | { kind: "ok"; durationMs: number }
-    | { kind: "error"; message: string };
+  import WriteTargetList, { type WriteStatus } from "./WriteTargetList.svelte";
 
   let vinBody = $state("");
   let writing = $state(false);
@@ -88,13 +81,25 @@
     return null;
   });
 
-  /** Candidate identity-master rows — input to the FGNR-FSW scan. */
+  /**
+   * Candidate rows — every SGFAM entry with a CABD+SGBD, regardless
+   * of identity-master flags. The FAHRGESTELL_NR FSW set isn't
+   * confined to FA/ZCS-master ECUs on every chassis (e.g. E46 LSZ
+   * has FA=0 / ZCS=0 in SGFAM but still stores the VIN in its
+   * coding region). Filtering by flag misses those — the only
+   * reliable check is "does this ECU's CABD declare FAHRGESTELL_NR
+   * FSWs", which `resolveFgnrTargets` does.
+   *
+   * Cost: ~30 parallel CABD loads on a typical chassis, each a
+   * small file read + parse (CabdLoader caches both the directory
+   * listing and the parsed DatenFiles). The user-visible scan
+   * completes in ~50-100ms after the first open.
+   */
   const candidateSgs = $derived.by<SgfamRow[]>(() => {
     if (!app.chassis) return [];
     const seen = new Set<string>();
     const out: SgfamRow[] = [];
     for (const row of app.chassis.sgfam.values()) {
-      if (row.fa !== 1 && row.zcs !== 1) continue;
       if (!row.cabd || !row.sgbd) continue;
       if (seen.has(row.sgName)) continue;
       seen.add(row.sgName);
@@ -110,6 +115,29 @@
    * typical chassis, each cheap because CabdLoader caches parsed
    * files for the session.
    */
+  /**
+   * Scan candidates by probing their IPO file for the
+   * "FGNR_SCHREIBEN" jobname string. The string appears in any IPO
+   * that dispatches that jobname — regardless of write style. Two
+   * styles in the wild:
+   *
+   *   - Slot-driven (KMB_E46): IPO's Cod uses
+   *     `CDHGetFswDataFromCbd("FAHRGESTELL_NR")` to load FSW
+   *     metadata from CABD, then writes via the slot-table-driven
+   *     C_S_AUFTRAG. Requires CABD to declare FAHRGESTELL_NR[*]
+   *     FSWs. Host needs to call setNettoSlots() before dispatch.
+   *
+   *   - Param-driven (LSZ, EWS, likely others): IPO's Cod uses
+   *     `CDHGetCabdPar("FAHRGESTELL_NR")` to read the host-seeded
+   *     value directly, passes it to C_FG_AUFTRAG as a single
+   *     string parameter. No CABD FSWs needed; no slot-table
+   *     needed. Host just calls runCabimain — the cabd-par seed
+   *     is already done by `runtime.svelte.ts`.
+   *
+   * `writeOne` below detects which style to use by checking the
+   * built slot list — empty slots → fall back to param-driven path
+   * (just runCabimain, no setNettoSlots).
+   */
   async function resolveFgnrTargets(): Promise<void> {
     const chassis = app.chassis;
     if (!chassis) {
@@ -119,15 +147,19 @@
     fgnrTargets = undefined;
     const matched: SgfamRow[] = [];
     const probes = candidateSgs.map(async (row) => {
+      if (!row.cabd) return;
       try {
-        const ci = guessCiForRow(row);
-        if (ci === null) return;
-        const cabd = await chassis.cabd.openModule(row.sgName, ci);
-        if (hasFgnrFsw(cabd)) matched.push(row);
+        // Load the IPO bytes once and string-search for the jobname.
+        // Much cheaper than parsing the full IPO + walking cabimain.
+        // BMW's IPOs store string constants as null-terminated
+        // ASCII in the constants section, so a UTF-8 byte search
+        // catches them verbatim.
+        const ipo = await loadIpoBytes(row.cabd);
+        if (containsAscii(ipo, "FGNR_SCHREIBEN")) matched.push(row);
       } catch {
-        // CABD load failed — skip. Real-world causes: SGAUSWAHL CBD
-        // points at a `.Cxx` revision the chassis doesn't actually
-        // ship; happens on edge-case CABDs.
+        // IPO load failed (file missing, source error). Skip — this
+        // ECU's IPO either doesn't exist on disk or can't be read,
+        // so it can't be a write target anyway.
       }
     });
     await Promise.all(probes);
@@ -138,49 +170,23 @@
   }
 
   /**
-   * Pick the SGAUSWAHL-declared default CI for a SGFAM row. Most
-   * chassis pin one CI per SG; for multi-CI ECUs the FAHRGESTELL_NR
-   * FSW set is typically consistent across revisions (storage moves
-   * but the FSW names stay), so the probe answers the right
-   * question.
+   * Byte-search a Uint8Array for an ASCII substring. IPO string
+   * constants are stored as plain ASCII so encoding the needle as
+   * UTF-8 char codes and Boyer-Moore-Horspool-or-naive-search the
+   * haystack works. Naive search is fine here — IPOs are < 1 MB
+   * and the needle is short (e.g. "FGNR_SCHREIBEN" = 14 bytes), so
+   * worst-case O(n*m) is ~14 MB ops on a 1 MB IPO. Imperceptible.
    */
-  function guessCiForRow(row: SgfamRow): number | null {
-    const chassis = app.chassis;
-    if (!chassis) return null;
-    for (const block of chassis.sget.blocks) {
-      if (!block.name.startsWith("SGAUSWAHL_")) continue;
-      for (const sgr of block.rows) {
-        if (sgr.UMRSG !== row.sgName) continue;
-        const cbd = String(sgr.CBD ?? "");
-        const m = /^C([0-9A-Fa-f]{1,2})$/.exec(cbd);
-        if (m) {
-          const n = Number.parseInt(m[1]!, 16);
-          if (Number.isFinite(n)) return n;
-        }
+  function containsAscii(haystack: Uint8Array, needle: string): boolean {
+    if (needle.length === 0) return true;
+    const target = new Uint8Array(needle.length);
+    for (let i = 0; i < needle.length; i++) target[i] = needle.charCodeAt(i);
+    const end = haystack.length - needle.length;
+    outer: for (let i = 0; i <= end; i++) {
+      for (let j = 0; j < needle.length; j++) {
+        if (haystack[i + j] !== target[j]) continue outer;
       }
-    }
-    return null;
-  }
-
-  function hasFgnrFsw(cabd: import("@emdzej/ncsx-daten").DatenFile): boolean {
-    const chassis = app.chassis;
-    if (!chassis?.swtFsw) return false;
-    for (const block of cabd.blocks) {
-      if (
-        block.name !== "PARZUWEISUNG_FSW" &&
-        block.name !== "PARZUWEISUNG_FSW1" &&
-        block.name !== "PARZUWEISUNG_DIR"
-      ) {
-        continue;
-      }
-      for (const row of block.rows) {
-        const fsw = row.FSW;
-        if (typeof fsw !== "number") continue;
-        const keyword = chassis.swtFsw.byKeyId.get(fsw);
-        if (typeof keyword === "string" && keyword.startsWith("FAHRGESTELL_NR")) {
-          return true;
-        }
-      }
+      return true;
     }
     return false;
   }
@@ -295,9 +301,14 @@
     const chassis = app.chassis;
     if (!chassis) throw new Error("no chassis loaded");
     if (!sg.cabd || !sg.sgbd) throw new Error(`${sg.sgName} missing CABD or SGBD`);
-    const ci =
-      app.selectedModule?.codingIndex ??
-      (await readCodingIndex(sg.sgbd, sg.cabd));
+    // Run IDENT against THIS ECU — NOT app.selectedModule's CI. In a
+    // multi-target write each ECU has its own coding index; using the
+    // selected-module CI across the board would open the wrong .Cxx
+    // for every ECU except the one the user happened to have selected
+    // (e.g. CI=8 for KMB might be 0x34 for LSZ). The IDENT round trip
+    // is cheap (~50-100ms) and is the only way to know the live CI per
+    // ECU.
+    const ci = await readCodingIndex(sg.sgbd, sg.cabd);
     if (typeof ci !== "number") {
       throw new Error("couldn't determine coding index from IDENT");
     }
@@ -318,20 +329,33 @@
     for (let i = 0; i < 18; i++) {
       values.set(`FAHRGESTELL_NR[${i + 1}]`, fgnr[i]!);
     }
+    // Build slots if the CABD declares FAHRGESTELL_NR FSWs (slot-
+    // driven IPO style, e.g. KMB). Empty slot list is fine — means
+    // this is a param-driven IPO (LSZ, EWS) that reads the value
+    // straight from the FAHRGESTELL_NR cabd-par (already seeded by
+    // runtime.svelte.ts).
     const built = buildSlotsFromValues(list, { values });
-    if (built.slots.length === 0) {
-      throw new Error(
-        `no FAHRGESTELL_NR FSWs in this CABD revision (skipped=${built.skipped.length})`,
-      );
-    }
     const wortBreite = list.memoryStructure === "BYTE" ? 1 : 2;
     const handle = await startNcsRuntime({
       cabdBasename: sg.cabd,
       sgbd: sg.sgbd,
     });
     try {
-      handle.cabi.setNettoSlots(built.slots);
-      await handle.cabi.CDHSetDataOrg(wortBreite, 0, 0);
+      if (built.slots.length > 0) {
+        handle.cabi.setNettoSlots(built.slots);
+        await handle.cabi.CDHSetDataOrg(wortBreite, 0, 0);
+      }
+      // For param-driven IPOs, the FAHRGESTELL_NR cabd-par seed in
+      // runtime.svelte.ts's FGNR_SCHREIBEN branch is the data
+      // channel — but it reads from `app.identity.vin`. We need to
+      // make sure that holds the value the user just typed BEFORE
+      // the dispatch. Set it on the cabi-provider directly so the
+      // dispatch picks it up without needing to mutate the global
+      // identity (which we only update on full-success).
+      await handle.cabi.CDHSetCabdPar(
+        "FAHRGESTELL_NR",
+        fgnr,
+      );
       await handle.runCabimain("FGNR_SCHREIBEN");
       const status = handle.cabi.lastJobStatus;
       if (status !== "OKAY") {
@@ -342,18 +366,22 @@
     }
   }
 
-  /** Inline IDENT to read ID_COD_INDEX when the cached one isn't available. */
+  /**
+   * Inline IDENT to read ID_COD_INDEX. The SGBD reports it as the hex
+   * digits that appear in the CABD filename (e.g. "34" for LSZ.C34),
+   * not the decimal byte value — so parse as base 16. KMB.C08 happens
+   * to be ambiguous (8 = 0x08), but LSZ.C34 makes the difference
+   * visible: decoded as decimal we'd look up "C22" and miss.
+   */
   async function readCodingIndex(sgbd: string, cabdBasename: string): Promise<number | null> {
     const handle = await startNcsRuntime({ cabdBasename, sgbd });
     try {
       await handle.cabi.CDHapiJob(sgbd, "IDENT", "", "");
-      const ci = handle.cabi.findResult("ID_COD_INDEX");
-      if (typeof ci === "number") return ci;
-      if (typeof ci === "string") {
-        const parsed = Number.parseInt(ci, 10);
-        if (Number.isFinite(parsed)) return parsed;
-      }
-      return null;
+      const raw = handle.cabi.findResult("ID_COD_INDEX");
+      const digits = typeof raw === "number" ? raw.toString() : typeof raw === "string" ? raw.trim() : "";
+      if (!digits) return null;
+      const parsed = Number.parseInt(digits, 16);
+      return Number.isFinite(parsed) ? parsed : null;
     } finally {
       await handle.dispose();
     }
@@ -422,80 +450,23 @@
           <p class="font-mono text-foreground">{fgnr || "—"}</p>
         </div>
 
-        <!-- Target ECU list — checkboxes pre-write, status pills during/post-write. -->
-        <div class="rounded border border-divider bg-base p-2">
-          <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-faint">
-            Target ECUs
-            {#if fgnrTargets !== undefined}
-              · {fgnrTargets.length} found
-              {#if !writing && results.size === 0}
-                · {selectedCount} selected
-              {/if}
-            {/if}
-          </p>
-          {#if fgnrTargets === undefined}
-            <p class="text-xs text-faint italic">
-              Scanning {candidateSgs.length} identity-master ECU CABD{candidateSgs.length === 1 ? "" : "s"} for FAHRGESTELL_NR FSWs…
-            </p>
-          {:else if fgnrTargets.length === 0}
-            <p class="text-xs text-rose-700 dark:text-rose-300">
-              No ECU on <span class="font-mono">{app.chassis?.code}</span>
-              declares <span class="font-mono">FAHRGESTELL_NR</span> in its CABD.
-              VIN write isn't supported on this chassis through ncsx.
-            </p>
-          {:else}
-            <ul class="space-y-1">
-              {#each fgnrTargets as row (row.sgName)}
-                {@const status = results.get(row.sgName)}
-                <li class="flex items-center justify-between gap-2 text-xs">
-                  <label class="flex min-w-0 flex-1 items-center gap-2 {writing || results.size > 0 ? 'cursor-default' : 'cursor-pointer'}">
-                    {#if results.size === 0 && !writing}
-                      <input
-                        type="checkbox"
-                        checked={selected.has(row.sgName)}
-                        onchange={() => toggle(row.sgName)}
-                      />
-                    {:else if status?.kind === "ok"}
-                      <span class="inline-flex h-4 w-4 items-center justify-center text-emerald-600 dark:text-emerald-400">✓</span>
-                    {:else if status?.kind === "error"}
-                      <span class="inline-flex h-4 w-4 items-center justify-center text-rose-600 dark:text-rose-400">✗</span>
-                    {:else if status?.kind === "writing"}
-                      <span class="inline-flex h-4 w-4 items-center justify-center text-amber-600 dark:text-amber-400">⟳</span>
-                    {:else}
-                      <span class="inline-flex h-4 w-4 items-center justify-center text-faint">·</span>
-                    {/if}
-                    <span class="min-w-0">
-                      <span class="font-semibold text-foreground">{row.sgName}</span>
-                      <span class="ml-2 font-mono text-faint">{row.sgbd}</span>
-                      {#if status?.kind === "ok"}
-                        <span class="ml-2 text-faint">({status.durationMs} ms)</span>
-                      {:else if status?.kind === "writing"}
-                        <span class="ml-2 text-faint italic">writing…</span>
-                      {:else if status?.kind === "pending"}
-                        <span class="ml-2 text-faint italic">queued</span>
-                      {/if}
-                    </span>
-                  </label>
-                  {#if status?.kind === "error"}
-                    <button
-                      class="rounded border border-divider px-2 py-0.5 text-xs text-muted hover:border-accent hover:bg-elevated disabled:opacity-40"
-                      onclick={() => retry(row)}
-                      disabled={writing}
-                      title={status.message}
-                    >
-                      retry
-                    </button>
-                  {/if}
-                </li>
-                {#if status?.kind === "error"}
-                  <li class="ml-6 text-xs text-rose-700 dark:text-rose-300 break-all">
-                    {status.message}
-                  </li>
-                {/if}
-              {/each}
-            </ul>
-          {/if}
-        </div>
+        <WriteTargetList
+          targets={fgnrTargets}
+          {selected}
+          {results}
+          {writing}
+          candidateCount={candidateSgs.length}
+          scanFor="FGNR_SCHREIBEN dispatch"
+          emptyMessage={`No IPO on ${app.chassis?.code ?? "this chassis"} dispatches FGNR_SCHREIBEN. VIN write isn't supported on this chassis.`}
+          onToggle={toggle}
+          onRetry={retry}
+          onSelectAll={() => {
+            if (fgnrTargets) selected = new Set(fgnrTargets.map((r) => r.sgName));
+          }}
+          onSelectNone={() => {
+            selected = new Set();
+          }}
+        />
 
         <p class="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-muted">
           <span class="font-semibold">Heads up:</span> ECUs typically
