@@ -375,6 +375,15 @@
             edit ZCS
           </button>
         {/if}
+        {#if app.identity.vin}
+          <button
+            class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
+            onclick={() => (app.showFgnrEditor = true)}
+            title="Edit VIN (FGNR) — write the new chassis number to the ECU"
+          >
+            edit VIN
+          </button>
+        {/if}
         <button
           class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
           onclick={clearIdentity}

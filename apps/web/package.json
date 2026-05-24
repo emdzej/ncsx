@@ -27,6 +27,7 @@
     "@emdzej/inpax-ui-provider-core": "^0.7.1",
     "@emdzej/ncsx-cabd": "workspace:*",
     "@emdzej/ncsx-chassis": "workspace:*",
+    "@emdzej/ncsx-coder": "workspace:*",
     "@emdzej/ncsx-daten": "workspace:*",
     "@emdzej/ncsx-ecu-select": "workspace:*",
     "@emdzej/ncsx-fa-asw": "workspace:*",

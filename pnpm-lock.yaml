@@ -80,6 +80,9 @@ importers:
       '@emdzej/ncsx-chassis':
         specifier: workspace:*
         version: link:../../packages/chassis
+      '@emdzej/ncsx-coder':
+        specifier: workspace:*
+        version: link:../../packages/coder
       '@emdzej/ncsx-daten':
         specifier: workspace:*
         version: link:../../packages/daten
@@ -205,6 +208,9 @@ importers:
       '@emdzej/ncsx-fa-asw':
         specifier: workspace:*
         version: link:../fa-asw
+      '@emdzej/ncsx-function-list':
+        specifier: workspace:*
+        version: link:../function-list
     devDependencies:
       '@types/node':
         specifier: ^22.13.1

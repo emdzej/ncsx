@@ -103,6 +103,8 @@ interface AppState {
   showFaEditor: boolean;
   /** Whether the ZCS edit dialog is open. */
   showZcsEditor: boolean;
+  /** Whether the FGNR (VIN) edit dialog is open. */
+  showFgnrEditor: boolean;
   /** Whether the About dialog is open. */
   showAbout: boolean;
   install: NcsxInstall | null;
@@ -159,6 +161,7 @@ export const app: AppState = $state({
   showSettings: false,
   showFaEditor: false,
   showZcsEditor: false,
+  showFgnrEditor: false,
   showAbout: false,
   install: null,
   chassis: null,

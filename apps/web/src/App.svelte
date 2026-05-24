@@ -15,6 +15,7 @@
   import IdentityPanel from "./components/IdentityPanel.svelte";
   import FaEditorDialog from "./components/FaEditorDialog.svelte";
   import ZcsEditorDialog from "./components/ZcsEditorDialog.svelte";
+  import FgnrEditorDialog from "./components/FgnrEditorDialog.svelte";
   import PatchDialog from "./components/PatchDialog.svelte";
   import AboutDialog from "./components/AboutDialog.svelte";
 
@@ -131,6 +132,7 @@
   <SettingsDialog />
   <FaEditorDialog />
   <ZcsEditorDialog />
+  <FgnrEditorDialog />
   <PatchDialog />
   <AboutDialog />
 </div>

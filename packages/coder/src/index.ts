@@ -16,6 +16,12 @@ import type {
 } from './types.js';
 
 export type { AppliedEdit, CodingEdit, CodingPlan, PlanCodingOptions } from './types.js';
+export {
+  buildSlotsFromValues,
+  type BuildSlotsOptions,
+  type BuildSlotsResult,
+  type NettoSlot,
+} from './slot-builder.js';
 
 const DEFAULT_JOB = 'SG_CODIEREN';
 

@@ -21,7 +21,8 @@
     "@emdzej/ncsx-chassis": "workspace:*",
     "@emdzej/ncsx-daten": "workspace:*",
     "@emdzej/ncsx-ecu-select": "workspace:*",
-    "@emdzej/ncsx-fa-asw": "workspace:*"
+    "@emdzej/ncsx-fa-asw": "workspace:*",
+    "@emdzej/ncsx-function-list": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",
