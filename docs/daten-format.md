@@ -455,13 +455,19 @@ W 0106
 …
 ```
 
-| Letter | Meaning (best-guess from context) |
-|--------|-----------------------------------|
-| `Z`    | "Zwang" — mandatory marker token (`#NNNN` referencing SA codes). |
-| `E`    | "Entfällt" — fallback / removed slot. |
-| `W`    | "Wahl" — selectable option (numeric 4-digit ID). |
-| `S` (`Z`/`E`/`W` variants) | Subcategories appear in some chassis. |
+| Letter | Meaning | What it actually contains (E46) |
+|--------|---------|---------------------------------|
+| `W`    | "Wahl" — selectable option | **Both** SA codes (`205`, `880`) **and** C_TYP model variants (`BW32`, `EP31`, `BL91`). On E46: 419 numeric + 208 alpha. Distinguish C_TYP from SA by shape `^[A-Z]{2}[A-Z0-9]{2}$`, not category. |
+| `Z`    | "Zeitpunkt" — production-update revision | `#`-prefixed date codes (`#0303`, `#0904`) — the marker that goes on the wire with `#` after the BR prefix. Sparse (4 entries on E46). |
+| `E`    | "Entfällt" / fallback retrofit | Dealer/retrofit codes (`EWS4`, `ZHZN`). Overlaps with H/K — same codes appear under multiple letters. |
+| `H`    | "Hinweis" / retrofit hint | Variants of E for retrofit-flagged options. |
+| `K`    | retrofit/KSD variants | E46: MAYDAY, NOKIA, LEDH — dealer-installable hardware. |
+| `A`    | (unverified) | E46: 10 alpha entries — purpose not yet mapped. |
 | `DATUM`/`DATEINAME` | metadata header lines. |
+
+**Critical caveat**: the AT category does **NOT** determine the FA wire marker. `205` (W numeric) takes `$` on the wire; `BW32` (W alpha) takes `*`; `N6SW` (W alpha in some FAs, missing in others) takes `&`. The marker is set by which structural slot the token occupies in `STANDARD_FA` — see `docs/fa-format.md §3` for the slot↔marker↔dictionary mapping and the type-shape heuristic used to split alpha-W into C_TYP vs SA.
+
+`LACK` (paint), `POLSTER` (upholstery), and `ZUSBAU` (sales order) have **no AT dictionary entries** on E46 — they're factory-burned values with no chassis-shipped enumeration.
 
 Records are 1 token wide and consumed by `coapiReadAuftrag` when parsing the M-list to seed the FA editor's drop-downs.
 

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { findSgsByFlag } from "@emdzej/ncsx-chassis";
   import {
     formatGm,
     formatSa,
@@ -12,10 +11,11 @@
   import type { SgfamRow } from "@emdzej/ncsx-text-tables";
   import { app } from "../lib/state.svelte";
   import { connection } from "../lib/ediabas-session.svelte";
-  import { startNcsRuntime } from "../lib/runtime.svelte";
+  import { loadIpoBytes, startNcsRuntime } from "../lib/runtime.svelte";
   import { describeFaKeywordWithFallback } from "../lib/fa-describe";
   import { findPhysicalModule, formatCi } from "../lib/process-ecu";
   import { buildZcsSlots } from "../lib/zcs-slots";
+  import WriteTargetList, { type WriteStatus } from "./WriteTargetList.svelte";
 
   /**
    * Local edit state — BODY ONLY for all three fields. The trailing
@@ -35,6 +35,22 @@
   let search = $state("");
   let writing = $state(false);
   let writeError = $state<string | null>(null);
+
+  /**
+   * ECUs whose IPO dispatches ZCS_SCHREIBEN. Discovered by byte-search
+   * over candidate IPOs on dialog open. `undefined` while the scan is
+   * in flight, `[]` if nothing matches (chassis doesn't support ZCS
+   * write), or a populated array.
+   *
+   * Mirrors the FGNR / FA dialogs' multi-target shape: ZCS values live
+   * on multiple ECUs (often KMB + LCM + IKE), and BMW expects them to
+   * agree. Writing to only one leaves the car inconsistent.
+   */
+  let zcsTargets = $state<SgfamRow[] | undefined>(undefined);
+  /** sgNames the user has selected to write to. Defaults to all targets. */
+  let selected = $state(new Set<string>());
+  /** Per-ECU status during/after a write run. */
+  let results = $state(new Map<string, WriteStatus>());
 
   /**
    * Computed check char for each field, OR null when the body is
@@ -75,7 +91,12 @@
   // every write failure visibly reverts GM/SA/VN back to the read
   // values — frustrating when you wanted to retry.
   $effect(() => {
-    if (!app.showZcsEditor) return;
+    if (!app.showZcsEditor) {
+      zcsTargets = undefined;
+      selected = new Set();
+      results = new Map();
+      return;
+    }
     untrack(() => {
       writeError = null;
       search = "";
@@ -98,19 +119,97 @@
       } catch {
         vn = z?.vn ?? "";
       }
+      void resolveZcsTargets();
     });
   });
 
   /**
-   * ZCSUT record for the SG we're writing to. Pulled from the chassis
-   * `<BR>ZCSUT.000` index. May be null when:
-   *   - The chassis is FA-master (no ZCSUT file ships).
-   *   - The chassis ships ZCSUT but doesn't list this SG.
-   *   - We don't have a target SG resolved yet.
-   * When null, GM/VN render as free-text inputs (the pre-ZCSUT UX).
+   * Candidate rows — every SGFAM entry with a CABD+SGBD. Filtering by
+   * `zcs=1` flag would miss IPOs that dispatch ZCS_SCHREIBEN without
+   * being flagged as ZCS-masters; the IPO byte-search below is the
+   * authoritative filter.
    */
+  const candidateSgs = $derived.by<SgfamRow[]>(() => {
+    if (!app.chassis) return [];
+    const seen = new Set<string>();
+    const out: SgfamRow[] = [];
+    for (const row of app.chassis.sgfam.values()) {
+      if (!row.cabd || !row.sgbd) continue;
+      if (seen.has(row.sgName)) continue;
+      seen.add(row.sgName);
+      out.push(row);
+    }
+    return out;
+  });
+
+  /**
+   * Scan candidates by probing their IPO file for the
+   * "ZCS_SCHREIBEN" jobname string. The string appears in any IPO that
+   * dispatches that jobname, regardless of slot-driven vs param-driven
+   * write style — KMB on E46 ships slot-driven ZCS through
+   * `C_S_AUFTRAG`; the byte-search catches it uniformly with anything
+   * that uses C_FG_AUFTRAG-style param dispatch.
+   */
+  async function resolveZcsTargets(): Promise<void> {
+    const chassis = app.chassis;
+    if (!chassis) {
+      zcsTargets = [];
+      return;
+    }
+    zcsTargets = undefined;
+    const matched: SgfamRow[] = [];
+    const probes = candidateSgs.map(async (row) => {
+      if (!row.cabd) return;
+      try {
+        const ipo = await loadIpoBytes(row.cabd);
+        if (containsAscii(ipo, "ZCS_SCHREIBEN")) matched.push(row);
+      } catch {
+        // IPO missing or unreadable — can't be a write target.
+      }
+    });
+    await Promise.all(probes);
+    matched.sort((a, b) => a.sgName.localeCompare(b.sgName));
+    zcsTargets = matched;
+    selected = new Set(matched.map((r) => r.sgName));
+    results = new Map();
+  }
+
+  function containsAscii(haystack: Uint8Array, needle: string): boolean {
+    if (needle.length === 0) return true;
+    const target = new Uint8Array(needle.length);
+    for (let i = 0; i < needle.length; i++) target[i] = needle.charCodeAt(i);
+    const end = haystack.length - needle.length;
+    outer: for (let i = 0; i <= end; i++) {
+      for (let j = 0; j < needle.length; j++) {
+        if (haystack[i + j] !== target[j]) continue outer;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function toggleTarget(sgName: string): void {
+    const next = new Set(selected);
+    if (next.has(sgName)) next.delete(sgName);
+    else next.add(sgName);
+    selected = next;
+  }
+
+  /**
+   * ZCSUT record for the SG we'll use as the GM/VN dropdown source.
+   * ZCS values themselves are universal across the ECUs we write to,
+   * but each ECU's ZCSUT entry catalogues which (GM, VN) templates it
+   * supports. We key off the SG the ZCS was originally read from
+   * (`zcsSource`) — that's the ECU whose dictionary is most relevant
+   * to the values currently in the inputs. Falls back to the first
+   * write target when the source isn't recorded (e.g. the user opened
+   * the dialog before any read).
+   */
+  const zcsutSourceSg = $derived(
+    app.identity?.zcsSource ?? zcsTargets?.[0] ?? null,
+  );
   const zcsutRecord = $derived.by(() => {
-    const ecuName = targetSg?.sgName;
+    const ecuName = zcsutSourceSg?.sgName;
     if (!ecuName) return null;
     return app.chassis?.zcsut?.bySg.get(ecuName) ?? null;
   });
@@ -395,29 +494,13 @@
     return errs.length === 0 ? null : errs.join("; ");
   });
 
-  /**
-   * Pick a SG to dispatch ZCS_SCHREIBEN against. Prefer the SG the ZCS
-   * was read from (so we hit the same ECU with the matching CABD);
-   * fall back to the first ZCS-master SGFAM row.
-   */
-  const targetSg = $derived.by<SgfamRow | null>(() => {
-    if (!app.chassis) return null;
-    if (app.identity?.zcsSource) return app.identity.zcsSource;
-    const masters = findSgsByFlag(app.chassis.sgfam, "zcs");
-    return masters[0] ?? null;
-  });
-
   function close(): void {
     if (writing) return;
     app.showZcsEditor = false;
   }
 
   async function commit(): Promise<void> {
-    if (!app.chassis || !app.identity?.zcs || !targetSg) return;
-    if (!targetSg.cabd || !targetSg.sgbd) {
-      writeError = `${targetSg.sgName} missing CABD or SGBD in SGFAM`;
-      return;
-    }
+    if (!app.chassis || !app.identity?.zcs || !zcsTargets || zcsTargets.length === 0) return;
     if (!connection.session) {
       writeError = "Connect to the ECU first";
       return;
@@ -429,112 +512,152 @@
       writeError = lengthError;
       return;
     }
+    const toWrite = zcsTargets.filter((r) => selected.has(r.sgName));
+    if (toWrite.length === 0) {
+      writeError = "No ECUs selected";
+      return;
+    }
     const ok = window.confirm(
-      `Write ZCS to ${targetSg.sgName} (${targetSg.sgbd})?\n\n` +
-        `GM=${appliedGm}, SA=${appliedSa}, VN=${appliedVn}\n\n` +
-        `Check digits computed; M36 algorithm = NCSEXPER's CalcMod36CheckSum.\n` +
-        `Dispatches ZCS_SCHREIBEN through ${targetSg.cabd}.IPO.`,
+      `Write ZCS to ${toWrite.length} ECU${toWrite.length === 1 ? "" : "s"}: ` +
+        toWrite.map((r) => r.sgName).join(", ") +
+        `\n\nGM=${appliedGm}, SA=${appliedSa}, VN=${appliedVn}\n\n` +
+        `Each ECU runs ZCS_SCHREIBEN with its own coding-index (IDENT\n` +
+        `per ECU). Partial failures leave the dialog open for retries.`,
     );
     if (!ok) return;
+
     writing = true;
     writeError = null;
+    // Optimistic identity update — runtime.svelte.ts seeds
+    // GM/SA/VN_SCHLUESSEL from `app.identity.zcs` inside runCabimain.
+    // Without updating it first, the runtime auto-seed clobbers any
+    // explicit cabd-par with the OLD values. Revert on total failure;
+    // partial leaves the new values visible (matches what some ECUs
+    // now hold).
     const oldZcs = app.identity.zcs;
-    // Push body+check (the IPO's seed in runtime.svelte.ts reads from
-    // these cabd-par values verbatim — the SGBD validates the check
-    // on the receiving end).
-    app.identity.zcs = { ...oldZcs, gm: appliedGm, sa: appliedSa, vn: appliedVn };
-    try {
-      // Resolve the ECU's current coding index — needed to pick the
-      // right `.Cxx` (different CIs put ZCS at different WORTADRs).
-      // Prefer the cached value from a prior module-pick; fall back
-      // to running IDENT here so the dialog works without the user
-      // visiting the module list first.
-      const chassis = app.chassis;
-      const ci =
-        app.selectedModule?.codingIndex ??
-        (await readCodingIndex(targetSg.sgbd));
-      if (typeof ci !== "number") {
-        throw new Error(
-          `Couldn't determine the ECU's coding index — IDENT didn't return ID_COD_INDEX`,
-        );
-      }
+    const newZcs = { ...oldZcs, gm: appliedGm, sa: appliedSa, vn: appliedVn };
+    app.identity.zcs = newZcs;
 
-      // Resolve the physical CABD module name from SGAUSWAHL + open
-      // the matching `.Cxx`. The opened DatenFile holds the
-      // `CODIERDATENBLOCK` row that buildZcsSlots reads to find the
-      // ZCS base address.
-      const physical = findPhysicalModule(chassis, targetSg.sgName, formatCi(ci));
-      if (!physical) {
-        throw new Error(
-          `No SGAUSWAHL row matches ${targetSg.sgName} + ${formatCi(ci)} — chassis ${chassis.code} doesn't ship this variant`,
-        );
-      }
-      const cabd = await chassis.cabd.openModule(physical.moduleName, ci);
+    const initial = new Map<string, WriteStatus>();
+    for (const t of toWrite) initial.set(t.sgName, { kind: "pending" });
+    results = initial;
 
-      // Build the 20-byte slot table (GM body + check, SA body +
-      // check, VN body + check) at the ZCS base address from
-      // CODIERDATENBLOCK. Anchor: docs/zcs-write.md §3.
-      const built = buildZcsSlots(cabd, appliedGm, appliedSa, appliedVn);
-      if (!built.ok) {
-        throw new Error(`buildZcsSlots: ${built.error}`);
-      }
-
-      // SPEICHERORG → wortBreite (1 for BYTE, 2 for WORD*). Matches
-      // processWriteCoding's derivation for SG_CODIEREN.
-      const memStructure = readSpeicherorgStructure(cabd);
-      const wortBreite = memStructure === "BYTE" ? 1 : 2;
-
-      const handle = await startNcsRuntime({
-        cabdBasename: targetSg.cabd,
-        sgbd: targetSg.sgbd,
-      });
+    let okCount = 0;
+    for (const sg of toWrite) {
+      results = new Map(results).set(sg.sgName, { kind: "writing" });
+      const start = performance.now();
       try {
-        handle.cabi.setNettoSlots(built.slots);
-        await handle.cabi.CDHSetDataOrg(wortBreite, 0, 0);
-        await handle.runCabimain("ZCS_SCHREIBEN");
-        const status = handle.cabi.lastJobStatus;
-        if (status !== "OKAY") {
-          throw new Error(
-            `ZCS_SCHREIBEN returned JOB_STATUS=${status || "(missing)"}`,
-          );
-        }
-      } finally {
-        await handle.dispose();
+        await writeOne(sg);
+        const durationMs = Math.round(performance.now() - start);
+        results = new Map(results).set(sg.sgName, { kind: "ok", durationMs });
+        okCount++;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        results = new Map(results).set(sg.sgName, { kind: "error", message });
       }
-      app.showZcsEditor = false;
-    } catch (err) {
+    }
+    writing = false;
+
+    if (okCount === 0) {
       app.identity.zcs = oldZcs;
-      writeError = err instanceof Error ? err.message : String(err);
-    } finally {
-      writing = false;
+    } else if (okCount === toWrite.length) {
+      setTimeout(() => { app.showZcsEditor = false; }, 600);
     }
   }
 
+  async function retry(sg: SgfamRow): Promise<void> {
+    if (writing) return;
+    writing = true;
+    results = new Map(results).set(sg.sgName, { kind: "writing" });
+    const start = performance.now();
+    try {
+      await writeOne(sg);
+      const durationMs = Math.round(performance.now() - start);
+      results = new Map(results).set(sg.sgName, { kind: "ok", durationMs });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      results = new Map(results).set(sg.sgName, { kind: "error", message });
+    }
+    writing = false;
+  }
+
   /**
-   * Fallback CI-reader. Spins up a minimal runtime just for the IDENT
-   * call and pulls `ID_COD_INDEX` from the result. Used when the user
-   * hits Write ZCS without having selected a module first (so
-   * `app.selectedModule.codingIndex` isn't populated).
+   * Per-ECU ZCS write. Always runs IDENT against THIS ECU — using a
+   * cached coding-index from another ECU (e.g. `app.selectedModule`)
+   * would open the wrong `.Cxx` here (CI=8 for KMB might be 0x34 for
+   * LSZ). The IDENT round-trip is cheap.
    */
-  async function readCodingIndex(sgbd: string): Promise<number | null> {
-    if (!targetSg?.cabd) return null;
+  async function writeOne(sg: SgfamRow): Promise<void> {
+    const chassis = app.chassis;
+    if (!chassis) throw new Error("no chassis loaded");
+    if (!sg.cabd || !sg.sgbd) throw new Error(`${sg.sgName} missing CABD or SGBD`);
+
+    const ci = await readCodingIndex(sg.sgbd, sg.cabd);
+    if (typeof ci !== "number") {
+      throw new Error("couldn't determine coding index from IDENT");
+    }
+
+    const physical = findPhysicalModule(chassis, sg.sgName, formatCi(ci));
+    if (!physical) {
+      throw new Error(
+        `no SGAUSWAHL row for ${sg.sgName} + ${formatCi(ci)} on ${chassis.code}`,
+      );
+    }
+    const cabd = await chassis.cabd.openModule(physical.moduleName, ci);
+
+    // Build the 20-byte slot table (GM body + check, SA body + check,
+    // VN body + check) at the ZCS base address from CODIERDATENBLOCK.
+    // Anchor: docs/zcs-write.md §3.
+    const built = buildZcsSlots(cabd, appliedGm, appliedSa, appliedVn);
+    if (!built.ok) {
+      throw new Error(`buildZcsSlots: ${built.error}`);
+    }
+
+    // SPEICHERORG → wortBreite (1 for BYTE, 2 for WORD*).
+    const memStructure = readSpeicherorgStructure(cabd);
+    const wortBreite = memStructure === "BYTE" ? 1 : 2;
+
     const handle = await startNcsRuntime({
-      cabdBasename: targetSg.cabd,
-      sgbd,
+      cabdBasename: sg.cabd,
+      sgbd: sg.sgbd,
     });
     try {
-      await handle.cabi.CDHapiJob(sgbd, "IDENT", "", "");
-      const ci = handle.cabi.findResult("ID_COD_INDEX");
-      if (typeof ci === "number") return ci;
-      if (typeof ci === "string") {
-        const parsed = Number.parseInt(ci, 10);
-        if (Number.isFinite(parsed)) return parsed;
+      handle.cabi.setNettoSlots(built.slots);
+      await handle.cabi.CDHSetDataOrg(wortBreite, 0, 0);
+      await handle.runCabimain("ZCS_SCHREIBEN");
+      const status = handle.cabi.lastJobStatus;
+      if (status !== "OKAY") {
+        throw new Error(`JOB_STATUS=${status || "(missing)"}`);
       }
-      return null;
     } finally {
       await handle.dispose();
     }
   }
+
+  /**
+   * Inline IDENT to read ID_COD_INDEX. The SGBD reports it as the hex
+   * digits that appear in the CABD filename (e.g. "34" for LSZ.C34),
+   * not the decimal byte value — so parse as base 16.
+   */
+  async function readCodingIndex(sgbd: string, cabdBasename: string): Promise<number | null> {
+    const handle = await startNcsRuntime({ cabdBasename, sgbd });
+    try {
+      await handle.cabi.CDHapiJob(sgbd, "IDENT", "", "");
+      const raw = handle.cabi.findResult("ID_COD_INDEX");
+      const digits = typeof raw === "number" ? raw.toString() : typeof raw === "string" ? raw.trim() : "";
+      if (!digits) return null;
+      const parsed = Number.parseInt(digits, 16);
+      return Number.isFinite(parsed) ? parsed : null;
+    } finally {
+      await handle.dispose();
+    }
+  }
+
+  const selectedCount = $derived(selected.size);
+  const allOk = $derived(
+    results.size > 0 && [...results.values()].every((s) => s.kind === "ok"),
+  );
+  const editingDisabled = $derived(writing || results.size > 0);
 
   /** Read `SPEICHERORG.STRUKTUR` ("BYTE" / "WORDMSB" / "WORDLSB"). */
   function readSpeicherorgStructure(cabd: import("@emdzej/ncsx-daten").DatenFile): string {
@@ -571,12 +694,9 @@
           <h2 class="text-sm font-bold uppercase tracking-wider text-muted">
             Edit ZCS
           </h2>
-          {#if targetSg}
-            <p class="mt-0.5 text-xs text-faint">
-              writes to <span class="font-mono">{targetSg.sgName}</span>
-              ({targetSg.sgbd}) via <span class="font-mono">ZCS_SCHREIBEN</span>
-            </p>
-          {/if}
+          <p class="mt-0.5 text-xs text-faint">
+            Writes the same GM/SA/VN to every selected ECU via ZCS_SCHREIBEN.
+          </p>
         </div>
         <button
           class="text-xs text-faint underline-offset-2 hover:text-muted hover:underline"
@@ -624,6 +744,7 @@
                 bind:value={gm}
                 spellcheck="false"
                 autocomplete="off"
+                disabled={editingDisabled}
               />
               <span
                 class="inline-flex w-6 items-center justify-center rounded border border-divider bg-elevated px-1 font-mono text-sm text-muted"
@@ -650,6 +771,7 @@
                 bind:value={saHex}
                 spellcheck="false"
                 autocomplete="off"
+                disabled={editingDisabled}
               />
               <span
                 class="inline-flex w-6 items-center justify-center rounded border border-divider bg-elevated px-1 font-mono text-sm text-muted"
@@ -670,6 +792,7 @@
                 bind:value={vn}
                 spellcheck="false"
                 autocomplete="off"
+                disabled={editingDisabled}
               />
               <span
                 class="inline-flex w-6 items-center justify-center rounded border border-divider bg-elevated px-1 font-mono text-sm text-muted"
@@ -742,6 +865,7 @@
             placeholder="Search code, comment, or FSW…"
             bind:value={search}
             class="mb-2 w-full rounded border border-rule bg-base px-2 py-1 text-sm text-foreground focus:border-accent focus:outline-none"
+            disabled={editingDisabled}
           />
           <ul class="min-h-[10rem] flex-1 overflow-y-auto rounded border border-divider bg-base text-xs">
             {#if filteredEntries.length === 0}
@@ -755,6 +879,7 @@
                       type="checkbox"
                       class="accent-accent"
                       checked={on}
+                      disabled={editingDisabled}
                       onchange={(ev) => toggle(e, (ev.currentTarget as HTMLInputElement).checked)}
                     />
                     <span class="font-mono text-foreground">{e.saCode}</span>
@@ -780,19 +905,51 @@
           </ul>
         </div>
 
+        <WriteTargetList
+          targets={zcsTargets}
+          {selected}
+          {results}
+          {writing}
+          candidateCount={candidateSgs.length}
+          scanFor="ZCS_SCHREIBEN dispatch"
+          emptyMessage={`No IPO on ${app.chassis?.code ?? "this chassis"} dispatches ZCS_SCHREIBEN. ZCS write isn't supported on this chassis.`}
+          onToggle={toggleTarget}
+          onRetry={retry}
+          onSelectAll={() => {
+            if (zcsTargets) selected = new Set(zcsTargets.map((r) => r.sgName));
+          }}
+          onSelectNone={() => {
+            selected = new Set();
+          }}
+        />
+
         {#if writeError}
           <p class="rounded border border-rose-500/40 bg-rose-500/10 p-2 text-xs text-rose-700 dark:text-rose-300">
             {writeError}
+          </p>
+        {/if}
+
+        {#if allOk}
+          <p class="rounded border border-emerald-500/40 bg-emerald-500/10 p-2 text-xs text-emerald-700 dark:text-emerald-300">
+            All ECUs accepted the write. Dialog closing…
           </p>
         {/if}
       </div>
 
       <footer class="flex items-center justify-between gap-2 border-t border-divider bg-elevated/50 px-4 py-2">
         <span class="text-xs text-faint">
-          {#if !hasChanges}
+          {#if writing}
+            writing…
+          {:else if zcsTargets === undefined}
+            resolving targets…
+          {:else if zcsTargets.length === 0}
+            no targets available
+          {:else if results.size > 0}
+            done · {[...results.values()].filter((s) => s.kind === "ok").length} ok / {[...results.values()].filter((s) => s.kind === "error").length} failed
+          {:else if !hasChanges}
             no changes staged
           {:else}
-            changes staged
+            {selectedCount} of {zcsTargets.length} selected
           {/if}
         </span>
         <div class="flex items-center gap-2">
@@ -806,18 +963,22 @@
           <button
             class="rounded bg-accent px-3 py-1 text-sm font-medium text-zinc-950 hover:bg-accent-muted disabled:cursor-not-allowed disabled:opacity-50"
             onclick={commit}
-            disabled={writing || !hasChanges || !targetSg || connection.status.kind !== "connected" || lengthError !== null}
+            disabled={writing || !hasChanges || zcsTargets === undefined || zcsTargets.length === 0 || selectedCount === 0 || connection.status.kind !== "connected" || lengthError !== null}
             title={connection.status.kind !== "connected"
               ? "Connect to the ECU first"
-              : !targetSg
-                ? "No ZCS-master SG available"
-                : !hasChanges
-                  ? "Stage at least one change first"
-                  : lengthError !== null
-                    ? lengthError
-                    : "Dispatch ZCS_SCHREIBEN"}
+              : zcsTargets === undefined
+                ? "Resolving targets…"
+                : zcsTargets.length === 0
+                  ? "No ECU dispatches ZCS_SCHREIBEN on this chassis"
+                  : !hasChanges
+                    ? "Stage at least one change first"
+                    : selectedCount === 0
+                      ? "Select at least one ECU"
+                      : lengthError !== null
+                        ? lengthError
+                        : `Dispatch ZCS_SCHREIBEN to ${selectedCount} ECU${selectedCount === 1 ? "" : "s"}`}
           >
-            {writing ? "Writing…" : "Write ZCS"}
+            {writing ? "Writing…" : `Write to ${selectedCount} selected`}
           </button>
         </div>
       </footer>

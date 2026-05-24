@@ -237,12 +237,25 @@
 
     writing = true;
     writeError = null;
-    // Seed all targets to "pending" so the UI shows them as queued.
+    // Optimistic identity update — runtime.svelte.ts seeds
+    // FAHRGESTELL_NR from `app.identity.vin` inside runCabimain.
+    // Without updating it first, the runtime auto-seed clobbers any
+    // explicit CDHSetCabdPar with the OLD VIN, and each ECU then
+    // writes the previous value (ERROR_VERIFY on KMB / empty
+    // C_FG_AUFTRAG → ERROR_NUMBER_ARGUMENT on LSZ). Revert on total
+    // failure; on partial leave the new VIN visible (matches what
+    // some ECUs now hold).
+    const oldVin = app.identity?.vin;
+    const newVin = vinBody.toUpperCase();
+    if (app.identity) {
+      app.identity = { ...app.identity, vin: newVin };
+    }
+
     const initial = new Map<string, WriteStatus>();
     for (const t of toWrite) initial.set(t.sgName, { kind: "pending" });
     results = initial;
 
-    let allOk = true;
+    let okCount = 0;
     for (const sg of toWrite) {
       results = new Map(results).set(sg.sgName, { kind: "writing" });
       const start = performance.now();
@@ -250,24 +263,17 @@
         await writeOne(sg);
         const durationMs = Math.round(performance.now() - start);
         results = new Map(results).set(sg.sgName, { kind: "ok", durationMs });
+        okCount++;
       } catch (err) {
-        allOk = false;
         const message = err instanceof Error ? err.message : String(err);
         results = new Map(results).set(sg.sgName, { kind: "error", message });
       }
     }
     writing = false;
 
-    if (allOk) {
-      // Update the canonical app.identity so reads reflect the new
-      // VIN. Done only on full success — partial writes leave the
-      // car in a mixed state and showing the "new" VIN would lie.
-      if (app.identity) {
-        app.identity = { ...app.identity, vin: vinBody.toUpperCase() };
-      }
-      // Brief delay so the user sees the green checkmarks before
-      // the dialog vanishes. Could also auto-close immediately;
-      // 600ms feels deliberate without being annoying.
+    if (okCount === 0 && oldVin !== undefined && app.identity) {
+      app.identity = { ...app.identity, vin: oldVin };
+    } else if (okCount === toWrite.length) {
       setTimeout(() => {
         app.showFgnrEditor = false;
       }, 600);
@@ -345,17 +351,11 @@
         handle.cabi.setNettoSlots(built.slots);
         await handle.cabi.CDHSetDataOrg(wortBreite, 0, 0);
       }
-      // For param-driven IPOs, the FAHRGESTELL_NR cabd-par seed in
-      // runtime.svelte.ts's FGNR_SCHREIBEN branch is the data
-      // channel — but it reads from `app.identity.vin`. We need to
-      // make sure that holds the value the user just typed BEFORE
-      // the dispatch. Set it on the cabi-provider directly so the
-      // dispatch picks it up without needing to mutate the global
-      // identity (which we only update on full-success).
-      await handle.cabi.CDHSetCabdPar(
-        "FAHRGESTELL_NR",
-        fgnr,
-      );
+      // runtime.svelte.ts's FGNR_SCHREIBEN branch seeds FAHRGESTELL_NR
+      // from `app.identity.vin` (with the Mod-36 check appended). The
+      // commit() above updates app.identity.vin optimistically, so
+      // the seed picks up the user's new VIN automatically — no
+      // explicit CDHSetCabdPar needed here.
       await handle.runCabimain("FGNR_SCHREIBEN");
       const status = handle.cabi.lastJobStatus;
       if (status !== "OKAY") {

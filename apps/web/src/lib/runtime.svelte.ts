@@ -323,14 +323,27 @@ export async function startNcsRuntime(
     // FAHRGESTELL_NR — seeded only for FGNR_SCHREIBEN, matching
     // dispatchUserJob's per-job branch. The VIN gets the BMW Mod-36
     // check character appended (formatFahrgestellNr port of
-    // coapiSetFgNr's CalcMod36CheckSum). The IPO ultimately ships
-    // the encoded VIN through the SGBD's `C_FG_AUFTRAG` job
-    // (via CDHapiJob / CDHapiJobData depending on the dispatcher).
+    // coapiSetFgNr's CalcMod36CheckSum).
+    //
+    // We seed BOTH stores because real IPOs disagree on which to read:
+    //   - LSZ / GM5 (param-driven C_FG_AUFTRAG): the IPO does
+    //     `CDHGetSystemData("FAHRGESTELL_NR")` (slot 0x2D, the
+    //     coapiSetFgNr-canonical store — see
+    //     docs/ncsexper-fahrgestell-nr-format.md). Without this, the
+    //     IPO reads `""` and dispatches `C_FG_AUFTRAG` with empty
+    //     para → ERROR_NUMBER_ARGUMENT.
+    //   - KMB (slot-driven C_S_AUFTRAG): the IPO also pulls from
+    //     CDHGetSystemData when building FAHRGESTELL_NR slot values.
+    //     Without the system-data seed the IPO writes whatever the
+    //     pre-read netto contained, the ECU's verify-read mismatches
+    //     → ERROR_VERIFY.
+    //   - The cabd-par seed is a no-op for these flows but harmless,
+    //     and keeps existing call sites that read via CDHGetCabdPar
+    //     (FA_READ / IdentityPanel) working.
     if (jobName === "FGNR_SCHREIBEN" && app.identity?.vin) {
-      await cabi.CDHSetCabdPar(
-        "FAHRGESTELL_NR",
-        formatFahrgestellNr(app.identity.vin),
-      );
+      const fgnr = formatFahrgestellNr(app.identity.vin);
+      await cabi.CDHSetCabdPar("FAHRGESTELL_NR", fgnr);
+      await cabi.CDHSetSystemData("FAHRGESTELL_NR", fgnr);
     }
     // ZCS_SCHREIBEN — seed GM/SA/VN keys from the cached ZCS read.
     // Matches the three coapiSetCabdPar calls at PC 0x402d2f..0x402d5d
