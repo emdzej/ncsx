@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { mod36Checksum, formatFahrgestellNr } from './m36-checksum.js';
+import {
+  formatFahrgestellNr,
+  formatGm,
+  formatSa,
+  formatVn,
+  mod36Checksum,
+  stripGmCheck,
+  stripSaCheck,
+  stripVnCheck,
+} from './m36-checksum.js';
 
 describe('BMW Mod-36 checksum', () => {
   it('encodes the worked NCSEXPER example "FPWBAAA00000PM10277" → L', () => {
@@ -40,5 +49,67 @@ describe('formatFahrgestellNr', () => {
   it('rejects wrong-length VIN', () => {
     expect(() => formatFahrgestellNr('TOOSHORT')).toThrow(/must be 17 chars/);
     expect(() => formatFahrgestellNr('WBAAA00000PM102771X')).toThrow(/must be 17 chars/);
+  });
+});
+
+describe('formatGm / formatSa / formatVn', () => {
+  // Reference data taken from real E46 ZCS reads (cabi-provider logs).
+  // The prefixes "C1"/"C2"/"C3" match the strncmp tests in
+  // NCSEXPER's FUN_00409f60 — those strip the same prefixes off
+  // incoming display strings, confirming the per-key channel tag.
+
+  it('GM: body "FFFFFFFF" + prefix "C1" → check P (=25)', () => {
+    expect(formatGm('FFFFFFFF')).toBe('FFFFFFFFP');
+  });
+
+  it('GM: body "61630000" + prefix "C1" → check 5', () => {
+    expect(formatGm('61630000')).toBe('616300005');
+  });
+
+  it('SA: body "0000284803AC1400" + prefix "C2" → check G (=16)', () => {
+    expect(formatSa('0000284803AC1400')).toBe('0000284803AC1400G');
+  });
+
+  it('VN: body "0000640620" + prefix "C3" → check 1', () => {
+    expect(formatVn('0000640620')).toBe('00006406201');
+  });
+
+  it('uppercases lowercase input before computing', () => {
+    expect(formatSa('0000284803ac1400')).toBe('0000284803AC1400G');
+  });
+
+  it('rejects wrong-length bodies', () => {
+    expect(() => formatGm('TOOSHORT')).not.toThrow(); // 8 chars exactly
+    expect(() => formatGm('FFFFFFF')).toThrow(/must be 8 chars/);
+    expect(() => formatSa('FFFFFFFFFFFFFFFFEXTRA')).toThrow(/must be 16 chars/);
+    expect(() => formatVn('123')).toThrow(/must be 10 chars/);
+  });
+});
+
+describe('stripGmCheck / stripSaCheck / stripVnCheck', () => {
+  it('GM: drops the 9th char (the check)', () => {
+    expect(stripGmCheck('616300005')).toBe('61630000');
+  });
+
+  it('SA: drops the 17th char', () => {
+    expect(stripSaCheck('0000284803AC1400G')).toBe('0000284803AC1400');
+  });
+
+  it('VN: 11 chars → drops check', () => {
+    expect(stripVnCheck('00006406201')).toBe('0000640620');
+  });
+
+  it('VN: 10 chars (some IPO reads return body-only) passes through', () => {
+    expect(stripVnCheck('0000640620')).toBe('0000640620');
+  });
+
+  it('round-trips: stripGmCheck(formatGm(x)) === x', () => {
+    expect(stripGmCheck(formatGm('61630000'))).toBe('61630000');
+  });
+
+  it('rejects wrong-length input', () => {
+    expect(() => stripGmCheck('shortone')).toThrow(/expected 9 chars/);
+    expect(() => stripSaCheck('toolong')).toThrow(/expected 17 chars/);
+    expect(() => stripVnCheck('123')).toThrow(/expected 10 or 11 chars/);
   });
 });

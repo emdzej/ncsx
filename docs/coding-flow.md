@@ -6,6 +6,7 @@ Companion to:
 - [`daten-format.md`](daten-format.md) — frame format, OPERATION operators, EINHEIT units, format-string mini-language.
 - [`ecu-selection.md`](ecu-selection.md) — how the SG list is picked before any of this runs.
 - [`trc-man-files.md`](trc-man-files.md) — what MAN/TRC files are and how they relate to the workflow.
+- [`zcs-write.md`](zcs-write.md) — the parallel ZCS_SCHREIBEN flow (different from FSW/PSW writes; sits in `CODIERDATENBLOCK.BEZEICHNUNG="ZCS"` and uses Mod-36 check digits with per-key prefixes).
 
 ---
 

@@ -9,7 +9,7 @@ import {
 } from '@emdzej/ncsx-text-tables';
 import { loadBrRef, resolveChassisCode } from './br-ref.js';
 import { CabdLoader } from './cabd-loader.js';
-import { indexAt, indexSgfam, indexZst } from './indexes.js';
+import { indexAt, indexSgfam, indexZcsut, indexZst } from './indexes.js';
 import { loadSwtFile } from './swt.js';
 import type { ChassisSource } from './source.js';
 import type { Chassis, ChassisWarning, LoadChassisOptions } from './types.js';
@@ -177,8 +177,10 @@ export async function loadChassis(
     dst,
     sget: sget ?? emptyDaten(),
     sgvt: sgvt ?? emptyDaten(),
-    zcsut: zcsut ?? emptyDaten(),
     cvt: cvt ?? emptyDaten(),
+    // FA-master chassis don't ship ZCSUT — leave the field undefined so
+    // the ZCS editor can fall back to free-text inputs.
+    zcsut: zcsut ? indexZcsut(zcsut) : undefined,
     sgfam,
     zst,
     at: atIndex,

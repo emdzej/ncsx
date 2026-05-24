@@ -6,7 +6,7 @@ import type {
   SgfamRow,
 } from '@emdzej/ncsx-text-tables';
 import type { CabdLoader } from './cabd-loader.js';
-import type { ZstIndex } from './indexes.js';
+import type { ZcsutIndex, ZstIndex } from './indexes.js';
 import type { SwtTable } from './swt.js';
 
 export type ChassisWarning = {
@@ -36,8 +36,14 @@ export interface Chassis {
   dst: DatenFile;
   sget: DatenFile;
   sgvt: DatenFile;
-  zcsut: DatenFile;
   cvt: DatenFile;
+  /**
+   * Parsed `<BR>ZCSUT.000` — per-SG (GM, SA, VN) catalogue + conversion
+   * rules for pre-FA chassis. Optional because FA-master chassis don't
+   * ship a ZCSUT file. Raw `DatenFile` is available via `zcsut.file`;
+   * the indexed `bySg` map is what the ZCS editor consumes.
+   */
+  zcsut?: ZcsutIndex;
 
   /** SGFAM rows by logical SG name. */
   sgfam: Map<string, SgfamRow>;

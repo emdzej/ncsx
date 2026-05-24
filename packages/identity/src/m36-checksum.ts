@@ -104,3 +104,92 @@ export function formatFahrgestellNr(vin: string): string {
   const check = mod36Checksum(`FP${v}`);
   return v + check;
 }
+
+/**
+ * Per-key prefix the Mod-36 checksum input carries for ZCS values.
+ * NCSEXPER's CDHZcs_ValidateAndAppend (FUN_00449fb0) prepends these
+ * before invoking CalcMod36CheckSum, and ValidateZcsKey (FUN_0043eb80)
+ * checks the trailing char of the same `<prefix><body><check>` input.
+ *
+ * Verified empirically against multiple ECU reads:
+ *   GM body "FFFFFFFF" + prefix "C1" → check 'P' (= 25) ✓
+ *   GM body "61630000" + prefix "C1" → check '5' (= 5)  ✓
+ *   SA body "0000284803AC1400" + prefix "C2" → check 'G' (= 16) ✓
+ *   VN body "0000640620"       + prefix "C3" → check '1' (= 1)  ✓
+ *
+ * The prefix letters match the runtime `_strncmp(buf, "C1"/"C2"/"C3", 2)`
+ * tests in FUN_00409f60 — those strip the same prefixes from incoming
+ * display strings before processing, confirming GM=C1 / SA=C2 / VN=C3
+ * as NCSEXPER's canonical channel tags.
+ */
+const ZCS_PREFIX = { GM: 'C1', SA: 'C2', VN: 'C3' } as const;
+const ZCS_BODY_LENGTH = { GM: 8, SA: 16, VN: 10 } as const;
+
+function formatZcsKey(kind: 'GM' | 'SA' | 'VN', body: string): string {
+  const b = body.trim().toUpperCase();
+  const expected = ZCS_BODY_LENGTH[kind];
+  if (b.length !== expected) {
+    throw new Error(
+      `format${kind}: body must be ${expected} chars, got ${b.length} ("${b}")`,
+    );
+  }
+  const check = mod36Checksum(`${ZCS_PREFIX[kind]}${b}`);
+  return b + check;
+}
+
+/**
+ * Format an 8-char GM body as the 9-char NCSEXPER value the ZCS_SCHREIBEN
+ * SGBD job expects (body + 1 Mod-36 check char). Throws if the body
+ * isn't 8 chars; uppercases on the way through.
+ */
+export function formatGm(body: string): string {
+  return formatZcsKey('GM', body);
+}
+
+/** Format a 16-char SA body into the 17-char ZCS_SCHREIBEN form. */
+export function formatSa(body: string): string {
+  return formatZcsKey('SA', body);
+}
+
+/** Format a 10-char VN body into the 11-char ZCS_SCHREIBEN form. */
+export function formatVn(body: string): string {
+  return formatZcsKey('VN', body);
+}
+
+/**
+ * Inverse of `formatGm` — extract the 8-char body, drop the trailing
+ * check. Useful for surfacing the bare body in the editor UI. Does
+ * NOT validate the check char; callers can compare `formatGm(stripped)`
+ * to the input string to verify.
+ */
+export function stripGmCheck(value: string): string {
+  const v = value.trim().toUpperCase();
+  if (v.length !== 9) {
+    throw new Error(`stripGmCheck: expected 9 chars, got ${v.length} ("${v}")`);
+  }
+  return v.slice(0, 8);
+}
+
+/** Inverse of `formatSa`. */
+export function stripSaCheck(value: string): string {
+  const v = value.trim().toUpperCase();
+  if (v.length !== 17) {
+    throw new Error(`stripSaCheck: expected 17 chars, got ${v.length} ("${v}")`);
+  }
+  return v.slice(0, 16);
+}
+
+/**
+ * Inverse of `formatVn`. NB: some IPO reads return VN as the bare
+ * 10-char body without a check (asymmetric vs GM/SA which always carry
+ * the check) — so this accepts EITHER 10 or 11 chars and trims as
+ * appropriate. Callers wanting strict 11 should validate length first.
+ */
+export function stripVnCheck(value: string): string {
+  const v = value.trim().toUpperCase();
+  if (v.length === 10) return v;
+  if (v.length === 11) return v.slice(0, 10);
+  throw new Error(
+    `stripVnCheck: expected 10 or 11 chars, got ${v.length} ("${v}")`,
+  );
+}
