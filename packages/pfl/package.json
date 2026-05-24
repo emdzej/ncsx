@@ -17,7 +17,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@emdzej/inpax-ini-parser": "^0.7.0"
+    "@emdzej/inpax-ini-parser": "^0.7.1"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",

@@ -1062,7 +1062,14 @@ export class CabiProvider {
 
   async CDHGetCabdPar(bezeichner: string): Promise<CdhResult<{ wert: string }>> {
     const v = this.cabdPars.get(bezeichner);
-    return { retVal: COAPI_OK, out: { wert: typeof v === 'string' ? v : String(v ?? '') } };
+    const wert = typeof v === 'string' ? v : String(v ?? '');
+    // Symmetric with the [CDHSetCabdPar] trace — without this read,
+    // the IPO's cabimain prologue + early-bail paths produce
+    // silent runs (no visible CDHapiJob* calls because the IPO
+    // bailed in TestCDHFehler before reaching them). Logging the
+    // reads makes those bails diagnosable.
+    log.debug(`[CDHGetCabdPar] ${bezeichner} → ${JSON.stringify(wert)}`);
+    return { retVal: COAPI_OK, out: { wert } };
   }
 
   async CDHSetCabdWordPar(bezeichner: string, wert: number): Promise<CdhResult> {
@@ -1212,9 +1219,26 @@ export class CabiProvider {
    * IPO calls this to materialise the netto slot table from the loaded
    * CABD. In ncsx we seed slots from `FunctionList` host-side before
    * `runCabimain`, so this is a confirm-only no-op.
+   *
+   * Always returns OK — empty `slots` is a legitimate state for jobs
+   * that don't go through the FSW/PSW path (ZCS_SCHREIBEN,
+   * FGNR_SCHREIBEN, ZCS_LOESCHEN — all share the IPO's `Cod` handler
+   * with SG_CODIEREN, and `Cod`'s prologue calls this unconditionally
+   * before knowing which branch will actually run). Returning ERROR
+   * here used to bail `Cod` via `TestCDHFehler` before it reached any
+   * `CDHapiJob*` call, leaving the user with a silent failure (the
+   * symptom was a ZCS_SCHREIBEN dispatch that logged the cabd-par
+   * seeds, ran for ~1.5s, then ended with no further log lines).
+   * Empty slots produce a warning so legitimate "you forgot
+   * setNettoSlots before SG_CODIEREN" bugs are still surfaced.
    */
   async CDHGetNettoDataFromCbd(): Promise<CdhResult> {
-    return { retVal: this.slots.length > 0 ? COAPI_OK : COAPI_ERROR };
+    if (this.slots.length === 0) {
+      log.warn(
+        '[CDHGetNettoDataFromCbd] slots empty — expected for ZCS_SCHREIBEN / FGNR_SCHREIBEN / ZCS_LOESCHEN, a bug if you meant SG_CODIEREN',
+      );
+    }
+    return { retVal: COAPI_OK };
   }
 
   async CDHReadSget(): Promise<CdhResult<{ sgList: string }>> {
