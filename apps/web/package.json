@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-web",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Browser SPA for ncsx — pick an NCSEXPER DATEN folder, browse chassis + SG coding catalogues, edit via checkboxes, export TRC/MAN. Pure client-side; no server.",
   "private": true,
   "type": "module",

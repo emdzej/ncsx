@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-ecu-select",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Walks <BR>SGET.000 to produce the in-scope SG list for a given chassis + ASW. Equivalent of NCSEXPER's coapiScanAllSgFromBr.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

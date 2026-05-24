@@ -4,6 +4,106 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 — 2026-05-25
+
+End-to-end **identity-write flows** for FA, FGNR (VIN), and ZCS — all
+three now run as multi-target writes through a single shared UX, with
+candidate ECUs discovered by IPO byte-search and the IPO/SGBD seed
+channels traced and documented.
+
+### Added
+
+- **`@emdzej/ncsx-coder` `buildSlotsFromValues`** — generic FSW-value
+  → slot-table primitive that consumes a `FunctionList` and a
+  `Map<keyword, value>` and emits the slot list `setNettoSlots`
+  consumes. Replaces the bespoke `buildZcsSlots`-shaped helpers
+  per-field; future identity / factory-defaults flows can target it
+  directly. Exit values: `{ slots, netto, applied, skipped }`.
+- **`apps/web` `WriteTargetList` component.** Shared multi-ECU
+  checkbox-list + status-pills UI used by all three identity-write
+  dialogs. Renders per-ECU `pending → writing → ok / error` states
+  with retry-failed-only buttons, all/none select shortcuts, and an
+  "N of M selected" / "K ok / J failed" footer summary.
+- **Multi-target FGNR (VIN) write — `FgnrEditorDialog`.** New dialog
+  that scans the chassis for IPOs that dispatch `FGNR_SCHREIBEN`,
+  lets the user pick which ECUs to write to, and runs the dispatch
+  sequentially with per-ECU status. Catches both slot-driven (KMB on
+  E46) and param-driven (LSZ, GM5) write styles uniformly via IPO
+  byte-search.
+- **Multi-target ZCS write — `ZcsEditorDialog` retrofit.** Same shape:
+  IPO byte-search for `ZCS_SCHREIBEN`, per-ECU IDENT, multi-target
+  loop. ZCSUT dropdowns (GM/VN templates) and SA bit-picker keep
+  keying off the read-source SG since the values are universal across
+  the write set.
+- **Structured FA editor — `FaEditorDialog` rewrite.** Parses
+  `STANDARD_FA` into the typed struct
+  `{ br, date, typ, lack, polster, zusbau[], sa[] }` and edits each
+  slot independently. Slot-aware AT pickers: C_DATE from Z-`#`
+  entries, C_TYP from W type-shape (`^[A-Z]{2}[A-Z0-9]{2}$`), SA from
+  the remainder. LACK / POLSTER / ZUSBAU are freehand text since no
+  AT dictionary ships them. Multi-target write via FA_WRITE byte-
+  search.
+
+### Changed
+
+- **Runtime FGNR seed now writes both channels.** `runtime.svelte.ts`
+  seeds `FAHRGESTELL_NR` via **both** `CDHSetCabdPar` (slot 0x1B) and
+  `CDHSetSystemData` (slot 0x2C). LSZ/GM5 IPOs read VIN via
+  `CDHGetSystemData` — without that seed they dispatched
+  `C_FG_AUFTRAG` with `params(0)=[]` → `ERROR_NUMBER_ARGUMENT`.
+  KMB's slot builder also pulls from system-data when computing
+  FAHRGESTELL_NR[1..18] values; writing-without-seed produced
+  `ERROR_VERIFY` from the post-write read-back.
+- **Optimistic identity update for VIN / ZCS commit.** The runtime
+  auto-seeds VIN and ZCS from `app.identity.{vin,zcs}` inside
+  `runCabimain`, so the dialog updates the identity *before* the
+  write loop instead of only on success. Revert on total failure;
+  leave on partial (matches the mixed state of the car).
+- **Per-ECU `IDENT` in every identity-write loop.** Drops the
+  `app.selectedModule.codingIndex` shortcut that bled the
+  user-selected module's CI across every target ECU. The
+  `ID_COD_INDEX` parse is now base-16 — fixes `LSZ.C34` mapping to
+  the wrong `C22` `.Cxx` because the digit string `"34"` was being
+  parsed as decimal.
+- **Candidate scan via IPO byte-search.** All three dialogs find
+  write targets by reading `<basename>.IPO` bytes and string-
+  searching for the jobname (`FA_WRITE`, `FGNR_SCHREIBEN`,
+  `ZCS_SCHREIBEN`). Cheaper than parsing each IPO's cabimain
+  dispatch table; catches LSZ-style param-driven writers that
+  declare no CABD FSWs for the field.
+- **`loadIpoBytes` exported from `runtime.svelte`** so the write-
+  dialog target-resolvers can probe IPO contents without booting
+  the VM.
+
+### Fixed
+
+- **FA wire-format round-trip on edit.** The previous flat-chip
+  editor flattened every constituent's marker to `$` on rebuild,
+  producing strings like `E46_$E46$0A08$N6TT$…$EP31#0904` that
+  FA.PRG's `FA_STREAM_FOR_ECU` rejected with `ERROR_UNKNOWN_CONSTIT`
+  (`$0A08` says "SA code" but `0A08` is a LACK). The structured
+  rewrite emits per-slot markers (`*BW32`, `%0A08`, `&N6TT`,
+  `|7531125`, `$205`) and the chassis-code duplication that produced
+  `E46_$E46$…` is dropped at parse time.
+- **FA double-marker on `#`-prefixed tokens.** `tokenizeFa`
+  preserves `#` (for AT date-code lookups); the old emitter
+  unconditionally prepended a marker, producing `$#0905` → `ERROR_SA`.
+  Tokens that already carry `#` now re-emit verbatim.
+
+### Documentation
+
+- **New `docs/fa-format.md`.** FA wire format with per-marker
+  constituents, the `FA_STREAM2STRUCT` decoded shape, slot →
+  AT-category dictionary mapping per slot, slot-driven vs
+  param-driven IPO write styles, and the system-data vs cabd-par
+  seed channel matrix (with the FGNR cautionary tale of seeding
+  the wrong channel).
+- **`docs/daten-format.md` AT category table** updated from
+  "best-guess from context" to what we measured on `E46AT.000`:
+  W mixes SA codes and C_TYP variants (disambiguated by code
+  shape, not category); Z is C_DATE (`#`-prefixed); LACK,
+  POLSTER, and ZUSBAU have no chassis-shipped AT entries.
+
 ## 0.3.1 — 2026-05-24
 
 Identity-panel UX rework + a Ghidra-verified rewrite of the FA / ZCS
