@@ -64,6 +64,7 @@ dialogs trust `JOB_STATUS=OKAY`).
 | OPFS-backed cache for parsed CABD bundles | future Phase 5 (web app) |
 | `TraceOverlay` persistence | future Phase 5 (web app) |
 | Kernfunktionen runner (interactive IPOs — abs_uc.ipo etc.) | future; reuse `@emdzej/inpax`'s UI providers, see [`ipo-usage.md`](ipo-usage.md) |
+| Custom FSW/PSW parameters (NCS Dummy's "Add Parameter" equivalent) — let users register custom PSW values under existing FSWs and ship them as patches | future; see [`custom-fsw-psw.md`](custom-fsw-psw.md) — sidecar overlay model recommended over NCS Dummy's in-place DATEN mutation |
 
 ## Architecture
 
