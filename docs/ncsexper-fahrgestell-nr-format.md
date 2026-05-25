@@ -287,6 +287,80 @@ chassis to ECU) which is the gated path. Other ZCS-master chassis
 (ZKE5, etc.) that have `C_FG_AUFTRAG` in their SGBD will need the same
 seeded format.
 
+## Bench-write status as of 2026-05-25 — `ERROR_VERIFY` on the bench LSZ
+
+After the [system-data seed fix](#fix) landed, `C_FG_AUFTRAG` started
+receiving the correct VIN parameter on LSZ (E46). The job now reaches
+the SGBD-side write step instead of bailing at the empty-param gate.
+However the bench result is still `ERROR_VERIFY` on a true content
+change — only **idempotent self-writes** (re-writing the value already
+on the ECU) succeed.
+
+### Investigation summary
+
+Disassembling `A_LSZ.ipo:Cod` (FGNR_SCHREIBEN branch, instructions
+0x9b..0xee):
+
+```
+00b5: CDHGetSystemData("FAHRGESTELL_NR")    → local[3] = full 18 chars
+00b6: midstr(local[3], 10, 7)               → local[5] = chars [9..16]
+00c3: local[5] != "ZZ00000" AND
+      local[5] != local[4]                  → only write on actual change
+00cd: CDHapiJob(C_LSZA, "C_FG_AUFTRAG",
+      local[3], "")                         → write the FULL 18 chars
+```
+
+- Trace confirms `C_FG_AUFTRAG params(1)=["WBAEP31060PE84104K"]` —
+  exactly what the IPO intends to send.
+- The IPO contains **zero auth calls** (no `CDHCallAuthenticate`,
+  `CDHAuthGetRandom`, SEED/KEY, or `BMW Login`). Same for `Cod`,
+  `Ident`, `cabimain`, and `__inpa_startup__`. NCSEXPER doesn't gate
+  VIN writes on LSZ through SecurityAccess at the IPO layer.
+- `JOB_STATUS=ERROR_VERIFY` is set by `C_LSZA.prg` (SGBD bytecode),
+  not by ediabasx. The SGBD does *write → read-back → compare* and
+  reports `ERROR_VERIFY` on mismatch.
+- `_TEL_ANTWORT = D0 0A A0 02 50 4D 10 27 70 22` decodes as header +
+  `"PM"` + BCD-packed `10277` + trailer — the **old** production
+  sequence. The ECU returned its current value after the write
+  request was issued, meaning the write request was silently dropped
+  at the bus level.
+
+### Likely causes (in order of probability)
+
+1. **Vehicle wake state not synthesised on the bench.** BMW K-line
+   ECUs typically only accept identity writes when KL15 + KL30 are
+   live and at least one CAN/K-bus partner is producing traffic.
+   The bench harness can ID-read fine but rejects identity writes.
+2. **One-time-programmable VIN slot on this LSZ revision.** Some E46
+   LSZ firmware variants lock VIN after first programming; a
+   different-VIN write becomes a no-op that the SGBD then catches as
+   ERROR_VERIFY.
+3. **Missing `DiagnosticSessionControl` (UDS 0x10) "programming
+   session"**. Our bench `INITIALISIERUNG` may not send the session-
+   change frame NCSEXPER's outer flow would on a real car.
+
+### Software stack verdict
+
+The cabi-provider, runtime seed (both `CDHSetCabdPar` and
+`CDHSetSystemData` for `FAHRGESTELL_NR`), the IPO dispatch, and the
+SGBD argument format are all correct against NCSEXPER's intent —
+verified end-to-end against the IPO disassembly. No further software
+fix is currently identifiable without an **NCSEXPER ABLAUF.TRC
+capture** of a successful real-vehicle VIN write on the same chassis
+to diff against our bench transport.
+
+Suggested follow-up tooling if you ever pick this up again:
+
+- Capture `ABLAUF.TRC` from NCSEXPER doing a known-good VIN write on
+  an E46 with the same LSZ firmware. Compare telegram sequence at
+  the kdcan layer (`ediabasx/packages/interface-serial/src/kdcan/`)
+  against ours. Anything NCSEXPER sends before `C_FG_AUFTRAG` that
+  we don't is the missing piece.
+- Confirm whether KMB (slot-driven, `C_S_AUFTRAG` path) has the same
+  failure mode — if KMB also `ERROR_VERIFY`s with the correct
+  payload, the issue is ECU-hardware, not protocol. If KMB works,
+  the issue is LSZ-specific.
+
 ## Suggested follow-ups
 
 - `FAHRGESTELL_NR_KOMPL` (= VIN[0..6], 7 chars) is also written by

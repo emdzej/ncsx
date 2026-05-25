@@ -277,8 +277,11 @@ to walk are well-bounded and the parser already exists for read flow.
 - `apps/web/src/lib/runtime.svelte.ts:329` — `FGNR_SCHREIBEN` seed
   (both stores), `FA_WRITE` seed (cabd-par only), `ZCS_SCHREIBEN`
   seed (3 keys via cabd-par)
-- `docs/ncsexper-fahrgestell-nr-format.md` — Mod-36 algorithm and the
-  GM5 C_FG_AUFTRAG SGBD-side gate
+- `docs/ncsexper-fahrgestell-nr-format.md` — Mod-36 algorithm, the
+  GM5 C_FG_AUFTRAG SGBD-side gate, and the LSZ bench-write
+  investigation (2026-05-25): IPO disassembly confirms correct
+  dispatch; bench writes still fail at the bus layer for what
+  appears to be vehicle-wake-state or session-control reasons
 - `docs/daten-format.md §2.3` — AT.000 record syntax
 - `packages/fa-asw/src/tokenize.ts` — `tokenizeFa` (`#` preservation
   rationale)
