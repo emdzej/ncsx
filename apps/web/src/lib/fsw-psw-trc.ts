@@ -22,6 +22,7 @@
  */
 
 import { decodeCurrentPsw, type FunctionList, type FunctionItem } from "@emdzej/ncsx-function-list";
+import { writeFswPswSelections, type FswPswSelection } from "@emdzej/ncsx-trace";
 
 export interface ParseFswPswManResult {
   /**
@@ -140,21 +141,24 @@ export function parseFswPswMan(text: string, list: FunctionList): ParseFswPswMan
  * Produce the TRC text — snapshot of currently-active FSW/PSWs.
  * Returns an empty string when the netto is missing or no FSW has
  * an active PSW.
+ *
+ * Text shape comes from `@emdzej/ncsx-trace`'s `writeFswPswSelections`
+ * so the TRC/MAN/CLI writers all share one formatter.
  */
 export function buildFswPswTrc(
   list: FunctionList,
   netto: Uint8Array,
 ): string {
-  const lines: string[] = [];
+  const selections: FswPswSelection[] = [];
   for (const item of list.items) {
     if (item.kind !== "function") continue;
     const active = decodeCurrentPsw(item, netto);
     if (!active) continue;
     const fswKw = item.fswKeyword || `FSW_${item.fsw}`;
     const pswKw = active.pswKeyword || `PSW_${active.psw}`;
-    lines.push(`${fswKw}\r\n\t${pswKw}\r\n`);
+    selections.push({ fswKeyword: fswKw, pswKeywords: [pswKw] });
   }
-  return lines.join("");
+  return writeFswPswSelections(selections, { lineEnding: "\r\n" });
 }
 
 /**
@@ -178,21 +182,21 @@ export function buildFswPswMan(
   for (const it of list.items) {
     if (it.kind === "function") fnByFsw.set(it.fsw, it);
   }
-  const pairs: Array<{ fsw: string; psw: string }> = [];
+  const selections: FswPswSelection[] = [];
   for (const [fswStr, pswId] of Object.entries(targets)) {
     const fswNum = Number(fswStr);
     const item = fnByFsw.get(fswNum);
     if (!item) continue;
     const param = item.parameters.find((p) => p.psw === pswId);
     if (!param) continue;
-    pairs.push({
-      fsw: item.fswKeyword || `FSW_${fswNum}`,
-      psw: param.pswKeyword || `PSW_${pswId}`,
+    selections.push({
+      fswKeyword: item.fswKeyword || `FSW_${fswNum}`,
+      pswKeywords: [param.pswKeyword || `PSW_${pswId}`],
     });
   }
-  // NCSdummy sorts FSW keywords alphabetically (`orderby item.Identifier`).
-  pairs.sort((a, b) => a.fsw.localeCompare(b.fsw));
-  return pairs.map((p) => `${p.fsw}\r\n\t${p.psw}\r\n`).join("");
+  // NCSdummy sorts FSW keywords alphabetically (`orderby item.Identifier`);
+  // CRLF line endings match its `StreamWriter.WriteLine` output.
+  return writeFswPswSelections(selections, { lineEnding: "\r\n", sort: true });
 }
 
 /**

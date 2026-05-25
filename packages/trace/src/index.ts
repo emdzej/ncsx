@@ -3,7 +3,9 @@ export {
   applyFswPswTrace,
   parseFswPswTrace,
   writeFswPswTrace,
+  writeFswPswSelections,
   type FswPswSelection,
+  type WriteFswPswOptions,
 } from './fsw-psw.js';
 export {
   applyNettodataTrace,

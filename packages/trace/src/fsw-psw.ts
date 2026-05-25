@@ -112,7 +112,7 @@ export function applyFswPswTrace(
  * Matches `NcsDummy/Classes/TraceFunctions/FswPswTraceFunctionListWriter.cs`.
  */
 export function writeFswPswTrace(overlay: TraceOverlay): string {
-  const lines: string[] = [];
+  const selections: FswPswSelection[] = [];
 
   // NCS Dummy sorts functions by FSW id before writing. We do the same.
   const functionItems = overlay.items
@@ -125,23 +125,69 @@ export function writeFswPswTrace(overlay: TraceOverlay): string {
 
   for (const item of functionItems) {
     if (item.kind !== 'function') continue;
-    lines.push(item.fswKeyword);
+    const pswKeywords: string[] = [];
     const seen = new Set<string>();
     for (const p of item.parameters) {
       if (!p.selected) continue;
       if (seen.has(p.pswKeyword)) continue;
       seen.add(p.pswKeyword);
-      lines.push(`\t${p.pswKeyword}`);
+      pswKeywords.push(p.pswKeyword);
     }
+    selections.push({ fswKeyword: item.fswKeyword, pswKeywords });
   }
 
   // Then unresolved keywords (NCS Dummy `FixUnresolved` puts them last by default; we
   // emit them after the resolved set to preserve the user's intent).
   for (const item of overlay.items) {
     if (item.kind !== 'unresolved') continue;
-    lines.push(item.fswKeyword);
-    for (const pswKw of item.parameterKeywords) lines.push(`\t${pswKw}`);
+    selections.push({ fswKeyword: item.fswKeyword, pswKeywords: [...item.parameterKeywords] });
   }
 
-  return lines.length > 0 ? lines.join('\n') + '\n' : '';
+  return writeFswPswSelections(selections);
+}
+
+/** Options for `writeFswPswSelections`. */
+export interface WriteFswPswOptions {
+  /**
+   * Line separator. Defaults to `'\n'` (matches `writeFswPswTrace` output).
+   * Pass `'\r\n'` for NCSEXPER / NCSdummy compatibility — NCSEXPER's text-mode
+   * `CStdioFile` writes `\r\n`, and that's what files dropped into `WORK/` look like.
+   */
+  lineEnding?: '\n' | '\r\n';
+  /**
+   * Sort FSW entries alphabetically before writing. NCSdummy's `WriteList`
+   * sorts by `Identifier` (the FSW keyword) — pass `true` for parity. Default
+   * `false` preserves caller-supplied order.
+   */
+  sort?: boolean;
+}
+
+/**
+ * Serialise a list of `FswPswSelection`s to the canonical text format:
+ *
+ *   <fsw_keyword><lineEnding>
+ *   \t<psw_keyword><lineEnding>
+ *   …
+ *
+ * The primitive writer both `writeFswPswTrace` (TraceOverlay-driven) and
+ * callers writing bare MAN files (CLI patch conversion, web app's
+ * `buildFswPswMan`) consume — keep them in sync by routing through here.
+ *
+ * Returns the empty string when `selections` is empty (no trailing newline).
+ */
+export function writeFswPswSelections(
+  selections: readonly FswPswSelection[],
+  opts: WriteFswPswOptions = {},
+): string {
+  const lineEnding = opts.lineEnding ?? '\n';
+  const ordered = opts.sort
+    ? [...selections].sort((a, b) => a.fswKeyword.localeCompare(b.fswKeyword))
+    : selections;
+  if (ordered.length === 0) return '';
+  const lines: string[] = [];
+  for (const sel of ordered) {
+    lines.push(sel.fswKeyword);
+    for (const psw of sel.pswKeywords) lines.push(`\t${psw}`);
+  }
+  return lines.join(lineEnding) + lineEnding;
 }
