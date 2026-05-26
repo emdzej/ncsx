@@ -22,9 +22,11 @@
  */
 
 import type { FunctionList } from "@emdzej/ncsx-function-list";
-import { decodeCurrentPsw } from "@emdzej/ncsx-function-list";
+import { buildFunctionList, decodeCurrentPsw } from "@emdzej/ncsx-function-list";
+import type { Chassis } from "@emdzej/ncsx-chassis";
 import {
   checkRequireCurrent,
+  extractCustomPsws,
   mergeModulePatch,
   modulesForCurrent,
   resolveModulePatch,
@@ -231,4 +233,54 @@ export function applyPatchToTargets(inputs: ApplyInputs): ApplyOutcome {
     requireCurrentMismatches,
     appliedModule: block,
   };
+}
+
+export interface RebuildFunctionListInputs {
+  chassis: Chassis;
+  /** Physical CABD module name (e.g. `KMB_E46`). Drives `cabd.openModule`. */
+  physicalModuleName: string;
+  /**
+   * SG short name (`umrsg`) — the key `custom_psws:` use in the patch. May
+   * differ from `physicalModuleName`. Looked up via `extractCustomPsws`.
+   */
+  umrsg: string;
+  codingIndex: number;
+  patch: PatchFile;
+}
+
+export interface RebuildFunctionListResult {
+  list: FunctionList;
+  /** Number of custom PSWs the patch contributed to this module. */
+  customPswCount: number;
+}
+
+/**
+ * Rebuild a module's FunctionList with the patch's `custom_psws:` overlay
+ * merged in. The result replaces `app.functionList` so the FunctionTree
+ * picks the new PSWs up; subsequent `applyPatchToTargets` calls resolve
+ * `edits` against the augmented list.
+ *
+ * Throws on overlay errors — unknown FSW, byte-length mismatch, or PSW
+ * keyword collision. Caller catches + surfaces to the user.
+ *
+ * The CABD re-open is async; existing builds in the app are sync because
+ * they happen during `process-ecu.ts` flow. Patch apply isn't a hot path,
+ * so the extra await is fine.
+ */
+export async function rebuildFunctionListWithPatch(
+  inputs: RebuildFunctionListInputs,
+): Promise<RebuildFunctionListResult> {
+  const customPsws = extractCustomPsws(inputs.patch).get(inputs.umrsg) ?? [];
+  const cabd = await inputs.chassis.cabd.openModule(
+    inputs.physicalModuleName,
+    inputs.codingIndex,
+  );
+  const list = buildFunctionList(cabd, {
+    keywords: {
+      fsw: inputs.chassis.swtFsw?.byKeyId,
+      psw: inputs.chassis.swtPsw?.byKeyId,
+    },
+    customPsws,
+  });
+  return { list, customPswCount: customPsws.length };
 }

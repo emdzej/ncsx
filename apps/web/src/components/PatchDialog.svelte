@@ -22,6 +22,7 @@
     buildPatchFromCurrent,
     formatCodingIndex,
     mergeIntoExistingPatch,
+    rebuildFunctionListWithPatch,
     serializePatch,
     type ApplyOutcome,
   } from "../lib/patches";
@@ -60,10 +61,61 @@
       ) ?? false;
       captureRequireCurrent = false;
     } else if (patchDialog.mode === "apply") {
-      // Compute & cache outcome so render and footer state stay in sync.
-      applyOutcome = computeApplyOutcome();
+      // If the patch declares `custom_psws:` for the current module,
+      // rebuild app.functionList with the overlay merged in before
+      // resolving — otherwise the patch's references to its own
+      // custom PSWs would resolve as "unknown PSW" warnings.
+      // Sync path stays for patches without custom PSWs.
+      void prepareApply();
     }
   });
+
+  /**
+   * Apply-mode preparation: rebuild the FunctionList with the patch's
+   * `custom_psws:` overlay (if any) before resolving. Catches overlay
+   * errors (unknown FSW, byte-length mismatch, keyword collision) and
+   * surfaces them via the dialog's `error` field instead of crashing.
+   */
+  async function prepareApply(): Promise<void> {
+    if (
+      !patchDialog.loadedPatch ||
+      !app.chassis ||
+      !app.selectedModule ||
+      !app.selectedModule.umrsg
+    ) {
+      // No umrsg means no SGAUSWAHL row → no way to look the patch's
+      // `module:` key against the loaded module. Skip the overlay
+      // rebuild and fall back to the existing apply path; if the patch
+      // doesn't carry custom_psws this is also fine.
+      applyOutcome = computeApplyOutcome();
+      return;
+    }
+    try {
+      const { list, customPswCount } = await rebuildFunctionListWithPatch({
+        chassis: app.chassis,
+        physicalModuleName: app.selectedModule.moduleName,
+        umrsg: app.selectedModule.umrsg,
+        codingIndex: app.selectedModule.codingIndex,
+        patch: patchDialog.loadedPatch,
+      });
+      app.functionList = list;
+      applyOutcome = computeApplyOutcome();
+      if (customPswCount > 0 && applyOutcome) {
+        applyOutcome = {
+          ...applyOutcome,
+          warnings: [
+            `Registered ${customPswCount} custom PSW${customPswCount === 1 ? "" : "s"} from this patch.`,
+            ...applyOutcome.warnings,
+          ],
+        };
+      }
+    } catch (err) {
+      error =
+        "Custom-PSW overlay rejected: " +
+        (err instanceof Error ? err.message : String(err));
+      applyOutcome = null;
+    }
+  }
 
   /** Current chassis + module fields — bail to "?" rather than crash if missing. */
   const chassisCode = $derived(app.chassis?.code ?? "?");
