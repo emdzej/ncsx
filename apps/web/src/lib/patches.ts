@@ -285,16 +285,72 @@ export async function rebuildFunctionListWithPatch(
   inputs: RebuildFunctionListInputs,
 ): Promise<RebuildFunctionListResult> {
   const customPsws = extractCustomPsws(inputs.patch).get(inputs.umrsg) ?? [];
+  const list = await rebuildFunctionListCore({
+    chassis: inputs.chassis,
+    physicalModuleName: inputs.physicalModuleName,
+    codingIndex: inputs.codingIndex,
+    customPsws,
+  });
+  return { list, customPswCount: customPsws.length };
+}
+
+/**
+ * Rebuild a module's FunctionList with an in-session custom-PSW
+ * draft merged in. Same shape as `rebuildFunctionListWithPatch` but
+ * takes the patch-schema `CustomPsw[]` directly — used by the
+ * "+ Add Parameter" UI which mutates a session-scoped draft rather
+ * than reading from a parsed patch file.
+ *
+ * Throws on overlay errors. Caller updates `app.functionList` with
+ * the result; Svelte's reactivity propagates to the FunctionTree.
+ */
+export async function rebuildFunctionListWithDraft(inputs: {
+  chassis: Chassis;
+  physicalModuleName: string;
+  codingIndex: number;
+  customPsws: readonly CustomPsw[];
+}): Promise<FunctionList> {
+  // Wrap the draft into a synthetic single-module patch so the same
+  // hex-string → Uint8Array conversion that `extractCustomPsws` does
+  // for patches applies here too. Keeps both rebuild paths sharing
+  // one data conversion implementation.
+  const syntheticPatch: PatchFile = {
+    schema: "ncsx-patch/v1",
+    title: "(draft)",
+    chassis: "(draft)",
+    modules: [
+      {
+        module: "_",
+        custom_psws: [...inputs.customPsws],
+        edits: { _placeholder: "_" },
+      },
+    ],
+  };
+  const overlay = extractCustomPsws(syntheticPatch).get("_") ?? [];
+  return rebuildFunctionListCore({
+    chassis: inputs.chassis,
+    physicalModuleName: inputs.physicalModuleName,
+    codingIndex: inputs.codingIndex,
+    customPsws: overlay,
+  });
+}
+
+/** Shared core — both rebuild paths funnel here once the overlay is normalised. */
+async function rebuildFunctionListCore(inputs: {
+  chassis: Chassis;
+  physicalModuleName: string;
+  codingIndex: number;
+  customPsws: ReadonlyArray<{ fswKeyword: string; pswKeyword: string; data: Uint8Array }>;
+}): Promise<FunctionList> {
   const cabd = await inputs.chassis.cabd.openModule(
     inputs.physicalModuleName,
     inputs.codingIndex,
   );
-  const list = buildFunctionList(cabd, {
+  return buildFunctionList(cabd, {
     keywords: {
       fsw: inputs.chassis.swtFsw?.byKeyId,
       psw: inputs.chassis.swtPsw?.byKeyId,
     },
-    customPsws,
+    customPsws: [...inputs.customPsws],
   });
-  return { list, customPswCount: customPsws.length };
 }

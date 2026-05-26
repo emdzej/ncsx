@@ -28,6 +28,7 @@
   } from "../lib/process-ecu";
   import { onMount } from "svelte";
   import { downloadFswPsw, downloadNettodatTrc, parseFswPswMan } from "../lib/fsw-psw-trc";
+  import { rebuildFunctionListWithDraft } from "../lib/patches";
   import { openPatchDialog } from "../lib/patch-dialog.svelte";
   import { parsePatch, PatchSchemaError, type CustomPsw } from "@emdzej/ncsx-patches";
 
@@ -80,17 +81,24 @@
   let targets = $state<Record<number, number>>({});
 
   /**
-   * Custom-PSW draft for the current module session. Authoring UI
-   * (the "+ Add Parameter" button on each FSW row — landing in a
-   * follow-up commit) appends entries here. Whenever the user opens
-   * the patch dialog (save / append modes), this list rides along as
-   * `currentCustomPsws` so the emitted module block includes its
-   * `custom_psws:` section.
+   * Custom-PSW draft for the current module session. The "+ Add
+   * Parameter" form on each FSW row appends entries here; whenever
+   * `customPswDraft` changes, `rebuildFunctionListWithDraft` runs
+   * and replaces `app.functionList` so the new PSW appears under
+   * the FSW alongside factory ones.
    *
-   * Reset alongside `targets` on every module switch / write success
-   * / Discard click — same lifecycle.
+   * Reset alongside `targets` on every module switch / write
+   * success / Discard click — same lifecycle.
    */
   let customPswDraft = $state<CustomPsw[]>([]);
+
+  /** Which FSW the inline "Add Parameter" form is open under, by FSW id. `null` = closed. */
+  let addParamFsw = $state<number | null>(null);
+  let addParamKeyword = $state("");
+  let addParamData = $state("");
+  let addParamDescription = $state("");
+  let addParamError = $state<string | null>(null);
+  let addParamBusy = $state(false);
 
   /**
    * "Patch capture" mode — when ON, clicking PSWs toggles them in
@@ -389,6 +397,141 @@
   function discardEdits(): void {
     targets = {};
     customPswDraft = [];
+    cancelAddParam();
+  }
+
+  /** Open the inline "+ Add Parameter" form under the given FSW. */
+  function openAddParam(fsw: number): void {
+    addParamFsw = fsw;
+    addParamKeyword = "";
+    addParamData = "";
+    addParamDescription = "";
+    addParamError = null;
+  }
+
+  function cancelAddParam(): void {
+    addParamFsw = null;
+    addParamKeyword = "";
+    addParamData = "";
+    addParamDescription = "";
+    addParamError = null;
+    addParamBusy = false;
+  }
+
+  /**
+   * Validate + commit a new custom PSW. Appends to `customPswDraft`
+   * then triggers a FunctionList rebuild via
+   * `rebuildFunctionListWithDraft`. On overlay error (e.g. byte-
+   * length mismatch caught by the builder) we roll back the draft
+   * and show the message inline.
+   */
+  async function submitAddParam(fsw: number, fswKeyword: string, expectedLen: number): Promise<void> {
+    addParamError = null;
+    const keyword = addParamKeyword.trim();
+    const dataRaw = addParamData.trim();
+    if (!keyword) {
+      addParamError = "Keyword is required";
+      return;
+    }
+    if (!/^[A-Za-z0-9_]+$/.test(keyword)) {
+      addParamError = "Keyword: letters / digits / underscore only";
+      return;
+    }
+    if (!dataRaw) {
+      addParamError = "Data is required";
+      return;
+    }
+    const cleanHex = dataRaw.replace(/[\s:]+/g, "");
+    if (!/^[0-9A-Fa-f]+$/.test(cleanHex)) {
+      addParamError = "Data must be a hex string";
+      return;
+    }
+    if (cleanHex.length % 2 !== 0) {
+      addParamError = "Data has an odd number of hex digits";
+      return;
+    }
+    if (cleanHex.length / 2 !== expectedLen) {
+      addParamError = `Data must be exactly ${expectedLen} byte${expectedLen === 1 ? "" : "s"} (${expectedLen * 2} hex digits)`;
+      return;
+    }
+    if (!app.chassis || !app.selectedModule) {
+      addParamError = "No module loaded";
+      return;
+    }
+
+    const entry: CustomPsw = {
+      fsw: fswKeyword,
+      keyword,
+      data: dataRaw,
+      ...(addParamDescription.trim() && { description: addParamDescription.trim() }),
+    };
+
+    addParamBusy = true;
+    // Optimistically append + try the rebuild; roll back on error.
+    const prev = customPswDraft;
+    customPswDraft = [...customPswDraft, entry];
+    try {
+      const newList = await rebuildFunctionListWithDraft({
+        chassis: app.chassis,
+        physicalModuleName: app.selectedModule.moduleName,
+        codingIndex: app.selectedModule.codingIndex,
+        customPsws: customPswDraft,
+      });
+      app.functionList = newList;
+      cancelAddParam();
+    } catch (err) {
+      customPswDraft = prev;
+      addParamError = err instanceof Error ? err.message : String(err);
+    } finally {
+      addParamBusy = false;
+    }
+  }
+
+  /**
+   * Remove a custom PSW from the draft by keyword (and FSW for
+   * unambiguity). Triggers the same rebuild flow as
+   * `submitAddParam`. Used by the small × badge rendered next to
+   * each draft entry's PSW row.
+   */
+  async function removeCustomPsw(fswKeyword: string, pswKeyword: string): Promise<void> {
+    if (!app.chassis || !app.selectedModule) return;
+    const prev = customPswDraft;
+    customPswDraft = customPswDraft.filter(
+      (e) => !(e.fsw === fswKeyword && e.keyword === pswKeyword),
+    );
+    try {
+      // Drop the corresponding target if the user had staged this PSW.
+      // The targets map keys on FSW id → PSW id; the removed PSW's
+      // id is gone after the rebuild, so its entry in targets points
+      // at a non-existent psw. Easier to clear by FSW than to hunt
+      // the id.
+      const item = app.functionList?.items.find(
+        (i) => i.kind === "function" && i.fswKeyword === fswKeyword,
+      );
+      if (item && item.kind === "function") {
+        const removedParam = item.parameters.find((p) => p.pswKeyword === pswKeyword);
+        if (removedParam && targets[item.fsw] === removedParam.psw) {
+          const next = { ...targets };
+          delete next[item.fsw];
+          targets = next;
+        }
+      }
+      const newList = await rebuildFunctionListWithDraft({
+        chassis: app.chassis,
+        physicalModuleName: app.selectedModule.moduleName,
+        codingIndex: app.selectedModule.codingIndex,
+        customPsws: customPswDraft,
+      });
+      app.functionList = newList;
+    } catch (err) {
+      customPswDraft = prev;
+      log.error({ err }, "rebuilding without custom PSW failed");
+    }
+  }
+
+  /** True for synthetic PSW ids reserved by `CUSTOM_PSW_ID_BASE`. */
+  function isCustomPsw(psw: number): boolean {
+    return psw >= 0xf000;
   }
 
   function clearPatchSelection(): void {
@@ -1589,6 +1732,14 @@
                     {#if isCurrent && pending}
                       <span class="ml-1 text-xs text-faint">(current)</span>
                     {/if}
+                    {#if isCustomPsw(p.psw)}
+                      <span
+                        class="ml-1 rounded bg-accent/15 px-1 py-0.5 text-[10px] font-medium text-accent"
+                        title="Custom PSW — defined in this session's draft; ships with the patch on Save"
+                      >
+                        custom
+                      </span>
+                    {/if}
                   </span>
                 </button>
                 <span class="flex items-baseline gap-2">
@@ -1628,6 +1779,18 @@
                       {isSelected ? "☑" : "☐"}
                     </button>
                   {/if}
+                  {#if isCustomPsw(p.psw)}
+                    <button
+                      type="button"
+                      class="text-base leading-none text-faint transition hover:text-amber-600"
+                      onclick={() =>
+                        removeCustomPsw(item.fswKeyword || `FSW_${item.fsw}`, p.pswKeyword)}
+                      title="Remove this custom PSW from the draft"
+                      aria-label="Remove custom PSW"
+                    >
+                      ×
+                    </button>
+                  {/if}
                 </span>
               </li>
             {/each}
@@ -1637,6 +1800,84 @@
               </li>
             {/if}
           </ul>
+
+          <!--
+            Inline "+ Add Parameter" form. NCS Dummy's same-named action
+            registers a brand-new PSW under the FSW with user-supplied
+            bytes; we mirror the affordance but persist via the patch
+            file (`custom_psws:` block) instead of mutating chassis DATEN.
+            See docs/custom-fsw-psw.md for the design rationale.
+          -->
+          {#if addParamFsw === item.fsw}
+            <div class="ml-4 mt-2 rounded border border-divider bg-surface-muted/40 p-2 text-xs">
+              <p class="mb-1 font-medium text-foreground">
+                New PSW under <span class="font-mono">{item.fswKeyword || `FSW #${item.fsw}`}</span>
+                <span class="ml-1 text-faint">({item.length} byte{item.length === 1 ? "" : "s"})</span>
+              </p>
+              <div class="grid grid-cols-[8rem_1fr] gap-1.5">
+                <label class="self-center text-faint" for="add-param-keyword">keyword</label>
+                <input
+                  id="add-param-keyword"
+                  type="text"
+                  bind:value={addParamKeyword}
+                  placeholder="my_custom_value"
+                  autocomplete="off"
+                  class="w-full rounded border border-divider bg-background px-2 py-1 font-mono text-sm"
+                />
+                <label class="self-center text-faint" for="add-param-data">
+                  data (hex)
+                </label>
+                <input
+                  id="add-param-data"
+                  type="text"
+                  bind:value={addParamData}
+                  placeholder={`${item.length * 2} hex digits e.g. ${"AA".repeat(item.length)}`}
+                  autocomplete="off"
+                  class="w-full rounded border border-divider bg-background px-2 py-1 font-mono text-sm"
+                />
+                <label class="self-center text-faint" for="add-param-desc">description</label>
+                <input
+                  id="add-param-desc"
+                  type="text"
+                  bind:value={addParamDescription}
+                  placeholder="(optional)"
+                  autocomplete="off"
+                  class="w-full rounded border border-divider bg-background px-2 py-1 text-sm"
+                />
+              </div>
+              {#if addParamError}
+                <p class="mt-1 text-amber-700 dark:text-amber-300">{addParamError}</p>
+              {/if}
+              <div class="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  class="rounded border border-divider px-2 py-1 text-xs text-muted hover:text-foreground"
+                  onclick={cancelAddParam}
+                  disabled={addParamBusy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="rounded bg-accent px-2 py-1 text-xs text-accent-foreground hover:bg-accent-muted disabled:opacity-50"
+                  onclick={() =>
+                    submitAddParam(item.fsw, item.fswKeyword || `FSW_${item.fsw}`, item.length)}
+                  disabled={addParamBusy}
+                >
+                  {addParamBusy ? "Adding…" : "Add PSW"}
+                </button>
+              </div>
+            </div>
+          {:else}
+            <button
+              type="button"
+              class="ml-4 mt-1 inline-flex items-center gap-1 text-xs text-muted hover:text-foreground"
+              onclick={() => openAddParam(item.fsw)}
+              title="Define a custom PSW for this FSW — ships with the patch on Save"
+            >
+              <span aria-hidden="true">＋</span> Add parameter
+            </button>
+          {/if}
         </li>
       {:else if item.kind === "property"}
         {@const prop = describe(item.fswKeyword || `PROPERTY #${item.fsw}`)}
