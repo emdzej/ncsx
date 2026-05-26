@@ -4,6 +4,67 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 — 2026-05-26
+
+**Custom PSW parameters** — NCS Dummy's "Add FSW/PSW Parameter" equivalent,
+end-to-end. Users can now register brand-new PSWs under existing FSWs, ship
+them inside `.ncsxpatch.yaml` files, and apply patches that bring custom
+PSWs with them. Factory DATEN stays untouched — the patch file IS the
+overlay. See [`docs/custom-fsw-psw.md`](docs/custom-fsw-psw.md) for the
+design.
+
+### Added
+
+- **`.ncsxpatch.yaml` schema** gains optional per-module `custom_psws:`
+  block. Each entry declares `fsw` + `keyword` + hex `data` + optional
+  `description`. Schema rejects malformed hex / odd digit counts at parse
+  time; round-trip via `serializePatch` / `parsePatch` preserves the block.
+- **`@emdzej/ncsx-patches`**: `extractCustomPsws(patch)` returns
+  `Map<moduleName, CustomPswOverlayEntry[]>` ready to pipe into the
+  function-list builder. `parseHexBytes(hex)` + `toOverlayEntry(psw)`
+  exposed as primitives.
+- **`@emdzej/ncsx-function-list`**: `buildFunctionList(daten, { customPsws })`
+  merges overlay entries into the matching FSW's parameter list after the
+  DATEN walk. Synthetic ids assigned from `CUSTOM_PSW_ID_BASE = 0xF000` —
+  the builder throws if any factory PSW occupies that range so the
+  reservation stays safe.
+- **`apps/web` FunctionTree**: inline **`+ Add parameter`** form under
+  each FSW row. Submit validates keyword shape, hex syntax, and
+  byte-length against the FSW's `length`; appends to a session-scoped
+  `customPswDraft`, rebuilds the FunctionList, and the new PSW appears
+  as a regular radio option with a small `custom` badge plus a × button
+  on its row that removes it from the draft.
+- **Apply patch**: when a loaded patch declares `custom_psws:` for the
+  current module, `app.functionList` is rebuilt with the overlay before
+  resolving `edits` — the patch's references to its own custom PSWs
+  now resolve cleanly instead of surfacing as "unknown PSW" warnings.
+- **Save / Append patch** thread the session's `customPswDraft` through
+  to the emitted YAML so a draft authored via `+ Add parameter` becomes
+  part of the saved file alongside the staged edits.
+
+### Internal
+
+- `rebuildFunctionListWithPatch` (patch-driven) and
+  `rebuildFunctionListWithDraft` (UI-driven) share a single
+  `rebuildFunctionListCore` in `apps/web/src/lib/patches.ts` — one
+  CABD-open + builder call regardless of source.
+
+### Notes
+
+- Patches still require at least one `edits:` entry per module (schema
+  constraint unchanged). A draft-only "library" patch isn't expressible
+  in v1 — stage at least one edit using your custom PSW before Save.
+- Custom-PSW ids are session-scoped and reassigned on every rebuild;
+  callers should not persist or rely on the numeric id outside one
+  in-process pass.
+
+### Tested
+
+- 17 new tests across `@emdzej/ncsx-patches` + `@emdzej/ncsx-function-list`
+  (overlay merge, sequential id assignment, error paths, hex parsing,
+  extractor grouping, schema rejection, round-trip equivalence). All 100+
+  workspace tests pass; web typecheck + svelte-check clean.
+
 ## 0.4.0 — 2026-05-25
 
 End-to-end **identity-write flows** for FA, FGNR (VIN), and ZCS — all

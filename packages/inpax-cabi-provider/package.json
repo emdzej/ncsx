@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-inpax-cabi-provider",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "CABI/CDH bridge for the inpax IPO interpreter — implements the 80+ CDH* functions NCSEXPER's A_*.ipo dispatchers call (statically linked in NCSEXPER.EXE). Signatures from CABI.H, behaviour ghidra-verified per docs/assumptions.md.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
