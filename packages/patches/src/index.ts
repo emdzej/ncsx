@@ -1,10 +1,13 @@
 export {
+  CustomPswSchema,
   ModulePatchSchema,
   PatchFileSchema,
   PatchSchemaError,
+  type CustomPsw,
   type ModulePatch,
   type PatchFile,
 } from './schema.js';
+export { extractCustomPsws, parseHexBytes, toOverlayEntry } from './custom-psws.js';
 export { parsePatch } from './parse.js';
 export { serializePatch } from './serialize.js';
 export {

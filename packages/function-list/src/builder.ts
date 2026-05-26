@@ -1,5 +1,7 @@
 import type { DatenFile, FieldValue, OrderedRow, RawBytes, RowValues } from '@emdzej/ncsx-daten';
 import {
+  CUSTOM_PSW_ID_BASE,
+  CustomPswOverlayEntry,
   FunctionItem,
   FunctionList,
   FunctionListError,
@@ -127,6 +129,17 @@ interface BuildFunctionListOptions {
    * both, so this is **off by default**. Turn on to mirror NCSDummy's options-list scoping.
    */
   skipIndividualBlocks?: boolean;
+  /**
+   * Optional list of custom PSW entries to merge into the built FunctionList.
+   * Each entry registers a new PSW under an existing FSW (matched by keyword);
+   * synthetic ids are assigned from `CUSTOM_PSW_ID_BASE` upward in the order
+   * the entries appear. See `docs/custom-fsw-psw.md`.
+   *
+   * Sourced from `@emdzej/ncsx-patches`' `custom_psws:` block via
+   * `extractCustomPsws`. The builder applies them AFTER the DATEN-driven
+   * walk so factory parameters are unchanged.
+   */
+  customPsws?: readonly CustomPswOverlayEntry[];
 }
 
 /**
@@ -376,6 +389,10 @@ export function buildFunctionList(
     }
   }
 
+  if (options.customPsws && options.customPsws.length > 0) {
+    mergeCustomPsws(items, options.customPsws);
+  }
+
   return {
     items,
     memoryStructure,
@@ -385,6 +402,64 @@ export function buildFunctionList(
     hardwareVersions,
     softwareVersions,
   };
+}
+
+/**
+ * Inject custom PSW entries into the matching FSW's `parameters` list.
+ *
+ * - Assigns sequential synthetic ids from `CUSTOM_PSW_ID_BASE`.
+ * - Throws on missing FSW (the user named an FSW the DATEN doesn't carry).
+ * - Throws on duplicate PSW keyword within a FSW (factory or another
+ *   custom — both are errors).
+ * - Throws on byte-length mismatch (the FSW expects N bytes, the entry's
+ *   `data` must be N bytes long).
+ * - Throws if any factory PSW already lives in the reserved id range —
+ *   guards against the unlikely day BMW ships ids ≥ 0xF000.
+ */
+function mergeCustomPsws(
+  items: FunctionListItem[],
+  entries: readonly CustomPswOverlayEntry[],
+): void {
+  const fnByKeyword = new Map<string, FunctionItem>();
+  for (const it of items) {
+    if (it.kind !== 'function') continue;
+    if (it.fswKeyword) fnByKeyword.set(it.fswKeyword, it);
+    for (const param of it.parameters) {
+      if (param.psw >= CUSTOM_PSW_ID_BASE) {
+        throw new FunctionListError(
+          `factory PSW id 0x${param.psw.toString(16)} occupies the custom range ` +
+            `(>= 0x${CUSTOM_PSW_ID_BASE.toString(16)}) on FSW "${it.fswKeyword}" — ` +
+            `the custom-PSW reservation is unsafe for this DATEN drop`,
+        );
+      }
+    }
+  }
+
+  let nextId = CUSTOM_PSW_ID_BASE;
+  for (const entry of entries) {
+    const fn = fnByKeyword.get(entry.fswKeyword);
+    if (!fn) {
+      throw new FunctionListError(
+        `custom PSW "${entry.pswKeyword}" targets unknown FSW "${entry.fswKeyword}"`,
+      );
+    }
+    if (entry.data.length !== fn.length) {
+      throw new FunctionListError(
+        `custom PSW "${entry.fswKeyword}/${entry.pswKeyword}" has ${entry.data.length} bytes; ` +
+          `FSW expects ${fn.length}`,
+      );
+    }
+    if (fn.parameters.some((p) => p.pswKeyword === entry.pswKeyword)) {
+      throw new FunctionListError(
+        `custom PSW keyword "${entry.pswKeyword}" already exists under FSW "${entry.fswKeyword}"`,
+      );
+    }
+    fn.parameters.push({
+      psw: nextId++,
+      pswKeyword: entry.pswKeyword,
+      data: new Uint8Array(entry.data),
+    });
+  }
 }
 
 /**

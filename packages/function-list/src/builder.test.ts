@@ -300,3 +300,110 @@ describe('buildFunctionList — INDIVID_S / GRUPPE_S gating', () => {
     expect(fnIds).toEqual([0x0100]);
   });
 });
+
+describe('buildFunctionList — customPsws overlay', () => {
+  // Reuse the example fixture; it ships one 1-byte FSW (id=0x0123, keyword
+  // resolved to "FSW_TEST" via the SWT map below) with two factory PSWs.
+  const file = parseDatenFile(buildExample());
+  const fswMap = new Map([[0x0123, 'FSW_TEST']]);
+  const pswMap = new Map([
+    [0x0001, 'aktiv'],
+    [0x0002, 'nicht_aktiv'],
+  ]);
+
+  it('injects a custom PSW into the matching FSW', () => {
+    const list = buildFunctionList(file, {
+      keywords: { fsw: fswMap, psw: pswMap },
+      customPsws: [
+        { fswKeyword: 'FSW_TEST', pswKeyword: 'custom_mid', data: new Uint8Array([0x42]) },
+      ],
+    });
+    const fn = list.items.find((i) => i.kind === 'function' && i.fswKeyword === 'FSW_TEST');
+    if (!fn || fn.kind !== 'function') throw new Error('expected FSW_TEST');
+    expect(fn.parameters.map((p) => p.pswKeyword)).toEqual([
+      'aktiv',
+      'nicht_aktiv',
+      'custom_mid',
+    ]);
+    const custom = fn.parameters[2]!;
+    expect(custom.psw).toBe(0xf000); // first assigned synthetic id
+    expect([...custom.data]).toEqual([0x42]);
+  });
+
+  it('assigns sequential ids in entry order', () => {
+    const list = buildFunctionList(file, {
+      keywords: { fsw: fswMap, psw: pswMap },
+      customPsws: [
+        { fswKeyword: 'FSW_TEST', pswKeyword: 'cu_a', data: new Uint8Array([0x11]) },
+        { fswKeyword: 'FSW_TEST', pswKeyword: 'cu_b', data: new Uint8Array([0x22]) },
+      ],
+    });
+    const fn = list.items.find((i) => i.kind === 'function' && i.fswKeyword === 'FSW_TEST');
+    if (!fn || fn.kind !== 'function') throw new Error('expected FSW_TEST');
+    expect(fn.parameters.map((p) => [p.pswKeyword, p.psw])).toEqual([
+      ['aktiv', 0x0001],
+      ['nicht_aktiv', 0x0002],
+      ['cu_a', 0xf000],
+      ['cu_b', 0xf001],
+    ]);
+  });
+
+  it('throws when targeting an unknown FSW', () => {
+    expect(() =>
+      buildFunctionList(file, {
+        keywords: { fsw: fswMap, psw: pswMap },
+        customPsws: [
+          { fswKeyword: 'NOPE', pswKeyword: 'x', data: new Uint8Array([0x00]) },
+        ],
+      }),
+    ).toThrow(/unknown FSW "NOPE"/);
+  });
+
+  it('throws on byte-length mismatch', () => {
+    // FSW_TEST has length 1 — passing 2 bytes is an error.
+    expect(() =>
+      buildFunctionList(file, {
+        keywords: { fsw: fswMap, psw: pswMap },
+        customPsws: [
+          { fswKeyword: 'FSW_TEST', pswKeyword: 'wrong_len', data: new Uint8Array([0x11, 0x22]) },
+        ],
+      }),
+    ).toThrow(/2 bytes; FSW expects 1/);
+  });
+
+  it('throws on duplicate PSW keyword (collision with factory)', () => {
+    expect(() =>
+      buildFunctionList(file, {
+        keywords: { fsw: fswMap, psw: pswMap },
+        customPsws: [
+          { fswKeyword: 'FSW_TEST', pswKeyword: 'aktiv', data: new Uint8Array([0xff]) },
+        ],
+      }),
+    ).toThrow(/already exists/);
+  });
+
+  it('throws on duplicate PSW keyword (custom-vs-custom collision)', () => {
+    expect(() =>
+      buildFunctionList(file, {
+        keywords: { fsw: fswMap, psw: pswMap },
+        customPsws: [
+          { fswKeyword: 'FSW_TEST', pswKeyword: 'same', data: new Uint8Array([0x11]) },
+          { fswKeyword: 'FSW_TEST', pswKeyword: 'same', data: new Uint8Array([0x22]) },
+        ],
+      }),
+    ).toThrow(/already exists/);
+  });
+
+  it('no-op when customPsws is empty or absent', () => {
+    const a = buildFunctionList(file, { keywords: { fsw: fswMap, psw: pswMap } });
+    const b = buildFunctionList(file, {
+      keywords: { fsw: fswMap, psw: pswMap },
+      customPsws: [],
+    });
+    // Same number of FSW parameters → no merge happened.
+    const aFn = a.items.find((i) => i.kind === 'function');
+    const bFn = b.items.find((i) => i.kind === 'function');
+    if (!aFn || aFn.kind !== 'function' || !bFn || bFn.kind !== 'function') throw new Error('?');
+    expect(aFn.parameters.length).toBe(bFn.parameters.length);
+  });
+});

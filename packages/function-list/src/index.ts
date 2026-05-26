@@ -1,7 +1,9 @@
 export { buildFunctionList } from './builder.js';
 export { applyPswToNetto, decodeCurrentPsw } from './decode.js';
 export {
+  CUSTOM_PSW_ID_BASE,
   FunctionListError,
+  type CustomPswOverlayEntry,
   type FunctionItem,
   type FunctionList,
   type FunctionListItem,

@@ -115,6 +115,40 @@ export interface KeywordSources {
   psw?: ReadonlyMap<number, string>;
 }
 
+/**
+ * One custom PSW to merge into the built FunctionList. Each entry registers
+ * a new PSW under an existing FSW (matched by keyword); the builder assigns
+ * a synthetic id from the `CUSTOM_PSW_ID_BASE` range so factory ids stay
+ * untouched.
+ *
+ * Sourced from `@emdzej/ncsx-patches`' `custom_psws:` block at apply time
+ * (see `extractCustomPsws`). Authoring lives in patch files — there is no
+ * separate overlay format. See `docs/custom-fsw-psw.md`.
+ */
+export interface CustomPswOverlayEntry {
+  /** Keyword of the FSW this PSW belongs under. Must already exist in the DATEN. */
+  fswKeyword: string;
+  /** New PSW's keyword. Must be unique within the FSW's parameter list. */
+  pswKeyword: string;
+  /**
+   * Byte values to write at the FSW's slot when this PSW is chosen. Length
+   * must equal the parent FSW's `length` byte count.
+   */
+  data: Uint8Array;
+}
+
+/**
+ * IDs at or above this value are reserved for custom PSWs. The builder
+ * checks every DATEN-sourced PSW id against this ceiling and throws if a
+ * factory PSW ever lands in the reserved range — the reservation only
+ * holds if BMW respects the same convention by accident.
+ *
+ * Empirically observed maximum in real DATEN: ≈ 0x1000-ish. 0xF000 leaves
+ * plenty of factory headroom while still giving 4096 custom slots per
+ * session.
+ */
+export const CUSTOM_PSW_ID_BASE = 0xf000;
+
 export class FunctionListError extends Error {
   constructor(message: string) {
     super(message);
