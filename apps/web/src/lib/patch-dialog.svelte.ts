@@ -7,7 +7,7 @@
  * mode but the open/close lifecycle is uniform.
  */
 
-import type { PatchFile } from "@emdzej/ncsx-patches";
+import type { CustomPsw, PatchFile } from "@emdzej/ncsx-patches";
 
 /** Which UI flow the dialog is running. */
 export type PatchDialogMode = "save" | "append" | "apply";
@@ -22,6 +22,14 @@ interface PatchDialogState {
    * that the apply will overlay (we don't refuse, just inform).
    */
   currentTargets: Record<number, number>;
+  /**
+   * Snapshot of the FunctionTree's per-session custom-PSW draft at
+   * open-time. For `save` / `append` these go into the module block's
+   * `custom_psws:` so the saved patch is self-describing. For
+   * `apply` we don't read this (the patch's own custom_psws drive
+   * the overlay rebuild) — kept on the state shape for uniformity.
+   */
+  currentCustomPsws: readonly CustomPsw[];
   /**
    * For `append`: the existing patch parsed from the picked file.
    * For `apply`: the patch the user is about to apply.
@@ -43,6 +51,7 @@ export const patchDialog = $state<PatchDialogState>({
   open: false,
   mode: "save",
   currentTargets: {},
+  currentCustomPsws: [],
   loadedPatch: null,
   loadedFilename: "",
   onApplied: null,
@@ -52,6 +61,8 @@ export function openPatchDialog(
   mode: PatchDialogMode,
   payload: {
     currentTargets: Record<number, number>;
+    /** Optional — defaults to empty array if the caller has no draft. */
+    currentCustomPsws?: readonly CustomPsw[];
     loadedPatch?: PatchFile;
     loadedFilename?: string;
     onApplied?: (targets: Record<number, number>) => void;
@@ -60,6 +71,7 @@ export function openPatchDialog(
   patchDialog.open = true;
   patchDialog.mode = mode;
   patchDialog.currentTargets = payload.currentTargets;
+  patchDialog.currentCustomPsws = payload.currentCustomPsws ?? [];
   patchDialog.loadedPatch = payload.loadedPatch ?? null;
   patchDialog.loadedFilename = payload.loadedFilename ?? "";
   patchDialog.onApplied = payload.onApplied ?? null;
@@ -70,4 +82,5 @@ export function closePatchDialog(): void {
   patchDialog.loadedPatch = null;
   patchDialog.loadedFilename = "";
   patchDialog.onApplied = null;
+  patchDialog.currentCustomPsws = [];
 }

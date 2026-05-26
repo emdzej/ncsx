@@ -32,6 +32,7 @@ import {
   resolveModulePatch,
   serializePatch,
   targetsToEdits,
+  type CustomPsw,
   type MergeMode,
   type ModulePatch,
   type PatchFile,
@@ -64,6 +65,14 @@ export interface BuildPatchInputs {
   targets: Record<number, number>;
   /** Last-read netto — required when `captureRequireCurrent` is true. */
   netto?: Uint8Array | null;
+  /**
+   * Custom PSW drafts the user authored in this session. Emitted as the
+   * module's `custom_psws:` block so a recipient applying the patch
+   * registers them into their FunctionList overlay. Empty arrays are
+   * omitted (no empty block written). Optional — `undefined` works
+   * exactly like `[]`.
+   */
+  customPsws?: readonly CustomPsw[];
   seed: PatchSeed;
 }
 
@@ -95,6 +104,11 @@ export function buildModulePatch(inputs: BuildPatchInputs): ModulePatch {
     module: inputs.module,
     edits,
   };
+  if (inputs.customPsws && inputs.customPsws.length > 0) {
+    // Schema accepts readonly arrays; convert to mutable for the
+    // typed-shape Zod inferred from `.array(...)`.
+    out.custom_psws = [...inputs.customPsws];
+  }
   if (inputs.seed.pinCodingIndex) {
     out.coding_indexes = [formatCodingIndex(inputs.codingIndex)];
   }

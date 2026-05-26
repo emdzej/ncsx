@@ -178,6 +178,7 @@
         codingIndex,
         functionList: app.functionList,
         targets: patchDialog.currentTargets,
+        customPsws: patchDialog.currentCustomPsws,
         netto: app.lastReadNetto,
         seed: {
           title: title.trim(),
@@ -214,6 +215,7 @@
           codingIndex,
           functionList: app.functionList,
           targets: patchDialog.currentTargets,
+          customPsws: patchDialog.currentCustomPsws,
           netto: app.lastReadNetto,
           seed: {
             title: patchDialog.loadedPatch.title, // preserved

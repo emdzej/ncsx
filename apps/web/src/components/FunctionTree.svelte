@@ -29,7 +29,7 @@
   import { onMount } from "svelte";
   import { downloadFswPsw, downloadNettodatTrc, parseFswPswMan } from "../lib/fsw-psw-trc";
   import { openPatchDialog } from "../lib/patch-dialog.svelte";
-  import { parsePatch, PatchSchemaError } from "@emdzej/ncsx-patches";
+  import { parsePatch, PatchSchemaError, type CustomPsw } from "@emdzej/ncsx-patches";
 
   let filter = $state("");
   let reading = $state(false);
@@ -78,6 +78,19 @@
    * coding, so we can drive the "N pending" badge without scanning the whole netto.
    */
   let targets = $state<Record<number, number>>({});
+
+  /**
+   * Custom-PSW draft for the current module session. Authoring UI
+   * (the "+ Add Parameter" button on each FSW row — landing in a
+   * follow-up commit) appends entries here. Whenever the user opens
+   * the patch dialog (save / append modes), this list rides along as
+   * `currentCustomPsws` so the emitted module block includes its
+   * `custom_psws:` section.
+   *
+   * Reset alongside `targets` on every module switch / write success
+   * / Discard click — same lifecycle.
+   */
+  let customPswDraft = $state<CustomPsw[]>([]);
 
   /**
    * "Patch capture" mode — when ON, clicking PSWs toggles them in
@@ -375,6 +388,7 @@
 
   function discardEdits(): void {
     targets = {};
+    customPswDraft = [];
   }
 
   function clearPatchSelection(): void {
@@ -451,6 +465,7 @@
         const patch = parsePatch(text);
         openPatchDialog("append", {
           currentTargets: patchCaptureMode ? patchSelections : targets,
+          currentCustomPsws: customPswDraft,
           loadedPatch: patch,
           loadedFilename: file.name,
         });
@@ -476,6 +491,7 @@
         const patch = parsePatch(text);
         openPatchDialog("apply", {
           currentTargets: targets,
+          currentCustomPsws: customPswDraft,
           loadedPatch: patch,
           loadedFilename: file.name,
           onApplied: (resolved) => {
@@ -507,6 +523,7 @@
     app.lastReadNetto = null;
     app.availableJobs = null;
     targets = {};
+    customPswDraft = [];
     patchSelections = {};
     patchCaptureMode = false;
     app.view = "browse-modules";
@@ -604,6 +621,7 @@
       }
       app.lastReadNetto = result.netto ?? null;
       targets = {};
+      customPswDraft = [];
       // Count active FSWs in the freshly-read netto so the user sees
       // not just "bytes read" but how many real coding decisions are
       // visible. `decodeCurrentPsw` returns null for FSWs the netto
@@ -693,6 +711,7 @@
         return;
       }
       targets = {};
+      customPswDraft = [];
       if (result.verifiedNetto) {
         app.lastReadNetto = result.verifiedNetto;
       }
@@ -771,6 +790,7 @@
         return;
       }
       targets = {};
+      customPswDraft = [];
       if (result.verifiedNetto) {
         app.lastReadNetto = result.verifiedNetto;
       }
@@ -1203,6 +1223,7 @@
       onclick={() =>
         openPatchDialog("save", {
           currentTargets: patchCaptureMode ? patchSelections : targets,
+          currentCustomPsws: customPswDraft,
         })}
       disabled={!app.functionList || !app.selectedModule ||
         (patchCaptureMode ? patchSelectionCount === 0 : pendingEdits.length === 0)}
