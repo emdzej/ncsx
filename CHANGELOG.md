@@ -4,6 +4,20 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.1 — 2026-05-27
+
+**inpax 0.8.1 uplift.** Picks up the upstream VM fix for cross-frame
+`Scope.Local` reference writes — without it any IPO function called
+with an out-/inout-param ref could write to the wrong stack slot or
+throw `Stack index out of bounds`. ncsx's coding IPOs (`Cod`,
+`FgnrSchreiben`, `JobsXX`, etc.) all use out-refs, so the upstream
+fix lands here as a routine dep bump.
+
+### Changed
+
+- All `@emdzej/inpax-*` dependencies bumped from `^0.7.1` → `^0.8.1`
+  (`packages/pfl`, `apps/web`).
+
 ## 0.5.0 — 2026-05-26
 
 **Custom PSW parameters** — NCS Dummy's "Add FSW/PSW Parameter" equivalent,

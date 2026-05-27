@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-coder",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Top-level coding orchestrator: chassis + FA + FSW/PSW edits → per-SG netto buffers ready for CODIERDATEN_SCHREIBEN.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
