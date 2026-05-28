@@ -1,13 +1,11 @@
 <script lang="ts">
   import {
     LOG_LEVELS,
-    isSecureContext,
-    isWebSerialSupported,
     resetConfig,
     saveConfig,
-    type InterfaceType,
     type LogLevel,
   } from "../lib/config";
+  import { InterfaceConfigPanel } from "@emdzej/ediabasx-web-ui";
   import {
     clearInstallHandle,
     saveInstallHandle,
@@ -80,35 +78,6 @@
     app.config = resetConfig();
   }
 
-  function setInterface(value: InterfaceType): void {
-    app.config = { ...app.config, interface: value };
-  }
-
-  /**
-   * Inputs are bound directly to `app.config.serial.*` via deep-write helpers — Svelte 5
-   * runes propagate per-field changes. We keep `serial` defined (with all fields) so the
-   * UI never has to ?? defaults inline.
-   */
-  function bindSerial<K extends keyof NonNullable<typeof app.config.serial>>(
-    key: K,
-  ): NonNullable<typeof app.config.serial>[K] {
-    return app.config.serial?.[key] as NonNullable<typeof app.config.serial>[K];
-  }
-
-  function setSerial<K extends keyof NonNullable<typeof app.config.serial>>(
-    key: K,
-    value: NonNullable<typeof app.config.serial>[K],
-  ): void {
-    app.config = {
-      ...app.config,
-      serial: { ...(app.config.serial ?? {}), [key]: value },
-    };
-  }
-
-  function setGatewayUrl(url: string): void {
-    app.config = { ...app.config, gateway: { ...(app.config.gateway ?? {}), url } };
-  }
-
   /**
    * Reset everything that depends on the picked install — chassis,
    * selected module, function list, last-read netto, identity. We
@@ -147,9 +116,6 @@
       app.error = err instanceof Error ? err.message : String(err);
     }
   }
-
-  const webSerialAvailable = $derived(isWebSerialSupported());
-  const secure = $derived(isSecureContext());
 
   // Tabs — keeps the dialog scannable. "Connection" is what
   // most users want most of the time, so it's the default.
@@ -212,137 +178,10 @@
 
       <section class="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm text-foreground">
         {#if activeTab === "connection"}
-        <!-- Interface -->
-        <div>
-          <label for="iface" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-faint">Interface</label>
-          <select
-            id="iface"
-            class="w-full rounded border border-rule bg-base px-2 py-1 text-sm text-foreground focus:border-accent focus:outline-none"
-            value={app.config.interface}
-            onchange={(e) => setInterface((e.currentTarget as HTMLSelectElement).value as InterfaceType)}
-          >
-            <option value="webserial">Web Serial (USB cable)</option>
-            <option value="gateway">Gateway (remote ediabasx server)</option>
-          </select>
-          {#if app.config.interface === "webserial" && !webSerialAvailable}
-            <p class="mt-1 text-xs text-red-500">
-              Web Serial is not available in this browser. Use Chrome / Edge / Opera on
-              desktop, served over HTTPS or localhost.
-            </p>
-          {/if}
-        </div>
+        <!-- Interface selector + per-interface fieldsets — shared
+             across the bimmerz family via @emdzej/ediabasx-web-ui. -->
+        <InterfaceConfigPanel bind:config={app.config} />
 
-        <!-- Web Serial config -->
-        {#if app.config.interface === "webserial"}
-          <fieldset class="space-y-3 rounded border border-divider bg-base p-3">
-            <legend class="px-1 text-xs font-semibold uppercase tracking-wider text-faint">
-              Serial parameters
-            </legend>
-            <div class="grid grid-cols-2 gap-3">
-              <label class="text-xs text-muted">
-                Baud
-                <input
-                  type="number"
-                  class="mt-0.5 w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-foreground focus:border-accent focus:outline-none"
-                  value={bindSerial("baudRate")}
-                  oninput={(e) =>
-                    setSerial("baudRate", Number((e.currentTarget as HTMLInputElement).value) || 115200)}
-                />
-              </label>
-              <label class="text-xs text-muted">
-                Timeout (ms)
-                <input
-                  type="number"
-                  class="mt-0.5 w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-foreground focus:border-accent focus:outline-none"
-                  value={bindSerial("timeoutMs")}
-                  oninput={(e) =>
-                    setSerial("timeoutMs", Number((e.currentTarget as HTMLInputElement).value) || 5000)}
-                />
-              </label>
-              <label class="text-xs text-muted">
-                Data bits
-                <select
-                  class="mt-0.5 w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-foreground focus:border-accent focus:outline-none"
-                  value={String(bindSerial("dataBits"))}
-                  onchange={(e) =>
-                    setSerial("dataBits", Number((e.currentTarget as HTMLSelectElement).value) as 7 | 8)}
-                >
-                  <option value="8">8</option>
-                  <option value="7">7</option>
-                </select>
-              </label>
-              <label class="text-xs text-muted">
-                Parity
-                <select
-                  class="mt-0.5 w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-foreground focus:border-accent focus:outline-none"
-                  value={bindSerial("parity")}
-                  onchange={(e) =>
-                    setSerial("parity", (e.currentTarget as HTMLSelectElement).value as "none" | "even" | "odd")}
-                >
-                  <option value="none">none</option>
-                  <option value="even">even</option>
-                  <option value="odd">odd</option>
-                </select>
-              </label>
-              <label class="text-xs text-muted">
-                Stop bits
-                <select
-                  class="mt-0.5 w-full rounded border border-rule bg-surface px-2 py-1 text-sm text-foreground focus:border-accent focus:outline-none"
-                  value={String(bindSerial("stopBits"))}
-                  onchange={(e) =>
-                    setSerial("stopBits", Number((e.currentTarget as HTMLSelectElement).value) as 1 | 2)}
-                >
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                </select>
-              </label>
-              <label class="flex items-center gap-2 text-xs text-muted">
-                <input
-                  type="checkbox"
-                  class="rounded border-rule"
-                  checked={bindSerial("probeAdapterOnConnect") ?? true}
-                  onchange={(e) =>
-                    setSerial("probeAdapterOnConnect", (e.currentTarget as HTMLInputElement).checked)}
-                />
-                Probe K+DCAN adapter on connect
-              </label>
-            </div>
-            <p class="text-xs text-faint">
-              Defaults match the K+DCAN cable consensus (115200, 8N1, fast init).
-              Disable the probe when working with a passthrough FTDI cable that
-              doesn't speak the K+DCAN telegrams.
-            </p>
-          </fieldset>
-        {/if}
-
-        <!-- Gateway config -->
-        {#if app.config.interface === "gateway"}
-          <fieldset class="space-y-2 rounded border border-divider bg-base p-3">
-            <legend class="px-1 text-xs font-semibold uppercase tracking-wider text-faint">
-              Gateway
-            </legend>
-            <label class="text-xs text-muted">
-              WebSocket URL
-              <input
-                type="text"
-                placeholder="ws://localhost:6801"
-                class="mt-0.5 w-full rounded border border-rule bg-surface px-2 py-1 font-mono text-sm text-foreground focus:border-accent focus:outline-none"
-                value={app.config.gateway?.url ?? ""}
-                oninput={(e) => setGatewayUrl((e.currentTarget as HTMLInputElement).value)}
-              />
-            </label>
-            {#if !secure && app.config.gateway?.url?.startsWith("ws://")}
-              <p class="text-xs text-amber-500">
-                ⚠ Page loaded over HTTPS — browsers refuse plain <code>ws://</code>.
-                Use <code>wss://</code> or load this page over <code>http://localhost</code>.
-              </p>
-            {/if}
-            <p class="text-xs text-faint">
-              Run <code>ediabasx gateway --transport websocket</code> on the machine
-              that owns the cable; point this URL at it.
-            </p>
-          </fieldset>
-        {/if}
 
         {:else if activeTab === "data"}
           <!-- Install root —

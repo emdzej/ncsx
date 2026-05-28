@@ -4,6 +4,45 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0 — 2026-05-28
+
+**ediabasx 0.4.0 + inpax 0.9.0 uplift.** Picks up the new SAE J2534
+transport, shared web-ui components, and the slow-K-line-ECU fix.
+Web app moves to the shared `@emdzej/bimmerz-theme` palette and
+deduplicates its interface-config + connect UI against the rest of
+the bimmerz family.
+
+### Added
+
+- **SAE J2534 transport** in the web app via
+  `@emdzej/ediabasx-interface-j2534`. Pick "J2534 (OpenPort 2.0)"
+  in Settings to drive a Tactrix OpenPort 2.0 over Web Serial — same
+  cluster / IKE / body-module coding that previously only worked
+  over K+DCAN now works over OpenPort too. Includes the host-side
+  `ParRegenTime` fix from ediabasx 0.4.0.
+- **Gateway transport** in the web app — pick "Gateway" + enter the
+  WebSocket URL of a remote `ediabasx gateway --transport websocket`
+  server. Used to be a config-only stub; now actually connects.
+- **Shared UI components from `@emdzej/ediabasx-web-ui`** — the
+  interface configuration panel and Connect/Disconnect pill come
+  from the shared package now. Adding a new transport upstream
+  shows up here automatically.
+
+### Changed
+
+- **Web app adopts `@emdzej/bimmerz-theme`.** Tailwind preset +
+  `tokens.css` import replace the local `:root` / `.dark` block.
+  Class names unchanged (`bg-surface`, `text-muted`, …); subtle
+  hue shift from ncsx's zinc neutrals to bimmerz's slate-tinted
+  palette, matching the rest of the family.
+- **`apps/web/src/lib/ediabas-session.svelte.ts`** — the previously
+  webserial-only `connectWebSerial()` becomes a polymorphic
+  `connect()` that branches on `app.config.interface`. The shared
+  `<InterfaceConfigPanel>` can now expose all three transports
+  knowing the session code actually handles them.
+- **All `@emdzej/ediabasx-*` deps bumped to `^0.4.0`**; all
+  `@emdzej/inpax-*` deps bumped to `^0.9.0`.
+
 ## 0.5.1 — 2026-05-27
 
 **inpax 0.8.1 uplift.** Picks up the upstream VM fix for cross-frame

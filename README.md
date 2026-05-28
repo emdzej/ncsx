@@ -18,7 +18,8 @@ File System Access + Web Serial).
 - A BMW Standard Tools install (genuine, BMW-shipped data). The app picks the root
   folder containing `NCSEXPER/`, `EDIABAS/`, and `EC-APPS/` and reads from it
   read-only — nothing is uploaded.
-- A K+DCAN cable plugged into a USB port (Web Serial), **or** an
+- A K+DCAN cable plugged into a USB port (Web Serial), a Tactrix
+  OpenPort 2.0 (SAE J2534), **or** an
   [`ediabasx` gateway](https://github.com/emdzej/ediabasx) running over WebSocket
   if the cable is on a different machine.
 - Chrome, Edge, Opera, or Brave on desktop. Firefox and Safari lack the required
