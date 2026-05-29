@@ -4,6 +4,66 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 — 2026-05-29
+
+**ediabasx 0.5.0 + inpax 0.10.0 + j2534 0.3.0 uplift.** Transport-layer
+upgrade — no ncsx-side code changes. Pulls in the FTDI / J2534 / Gateway
+sweep:
+
+- **FTDI USB-side latency timer auto-tuned** on K+DCAN connect (Linux
+  sysfs / macOS native addon via the new `@emdzej/ediabasx-mac-ftdi-latency`
+  optional dep / Windows hint). Slow K-line ECUs (cluster, IKE) stop
+  timing out their inter-byte windows at 16 ms default.
+- **Gateway default transport flipped TCP → WebSocket.** ncsx-web through
+  the gateway now works without specifying transport explicitly; the
+  Node 22+ global `WebSocket` covers both client and browser sides.
+- **Gateway closes its RPC coverage gaps**:
+  - `transmitFrequent` / `receiveFrequent` / `stopFrequent` —
+    `xfrequent` keepalive loops no longer silent-no-op across the
+    gateway.
+  - `getIgnitionStatus` / `getAdapterType` / `getAdapterVersion` —
+    SerialInterface-specific accessors now forwarded.
+  - `getInterfaceType` / `getInterfaceVersion` — eagerly prefetched
+    into sync cached fields at `connect()` so BEST2's `xtype` /
+    `xvers` opcodes can read them without awaiting a Promise.
+- **`UTILITY.PRG INTERFACE` returns correct TYP / VERSION** across every
+  transport (`"OBD"` / `0xD1` on K+DCAN and J2534 — verified against
+  BMW's OBD32.dll reference via Ghidra; `"ENET"` / `1` on ENET).
+- **J2534 safety blacklist now in `@emdzej/j2534-driver` 0.3.0** —
+  P1_MIN / P2_MIN / P2_MAX / P3_MAX / P4_MAX silently dropped from
+  SET_CONFIG by default, matching Tactrix's `op20pt32.dll` behaviour.
+  Closes the OpenPort 2.0 persistent-config corruption hole that
+  required EcuFlash reflashes to recover from.
+
+### Changed
+
+- **`@emdzej/ediabasx-*` deps bumped `^0.4.0` → `^0.5.0`** across
+  `ncsx-inpax-cabi-provider`, `ncsx-cli`, and `ncsx-web`.
+- **`@emdzej/inpax-*` deps bumped `^0.9.0` → `^0.10.0`** across the
+  same set of consumers.
+- **`@emdzej/j2534-*` peer deps bumped `^0.2.0` → `^0.3.0`** in
+  `ncsx-web`.
+
+### Notes
+
+- **macOS users must explicitly approve the native build.** pnpm ≥ 10
+  ignores dependency `install` / `postinstall` scripts by default for
+  supply-chain safety. After `pnpm install` you'll see:
+  ```
+  ╭ Warning ─────────────────────────────────────────────────────────╮
+  │   Ignored build scripts: @emdzej/ediabasx-mac-ftdi-latency@…     │
+  │   Run "pnpm approve-builds" to pick which dependencies should    │
+  │   be allowed to run scripts.                                     │
+  ╰──────────────────────────────────────────────────────────────────╯
+  ```
+  Run `pnpm approve-builds`, select `@emdzej/ediabasx-mac-ftdi-latency`,
+  then `pnpm rebuild` to compile the `IOSSDATALAT` `.node` addon.
+  Without this, the macOS FTDI latency path silently degrades to the
+  gateway-recommendation hint — slow K-line ECUs over a local K+DCAN
+  cable keep hitting the 16 ms latency wall until the addon is built.
+  Linux/Windows installs are unaffected (no native addon to build).
+- Lockstep bump across all 20 ncsx packages 0.6.0 → 0.7.0.
+
 ## 0.6.0 — 2026-05-28
 
 **ediabasx 0.4.0 + inpax 0.9.0 uplift.** Picks up the new SAE J2534
