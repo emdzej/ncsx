@@ -1,4 +1,8 @@
-import type { EdiabasJobResultLike, EdiabasLike } from '@emdzej/ncsx-wire';
+import {
+  findResult,
+  jobStatus,
+  type IEdiabas,
+} from '@emdzej/ncsx-wire';
 
 /**
  * Job NCSEXPER's `coapiReadFgNr` (NCSEXPER.EXE `0x0042e430`) actually issues. The
@@ -22,23 +26,6 @@ export interface VinReadResult {
   /** Last JOB_STATUS seen — useful for "tried, SG said NOT-OK". */
   jobStatus?: string;
   error?: string;
-}
-
-function findResult(
-  sets: EdiabasJobResultLike[][],
-  name: string,
-): EdiabasJobResultLike | undefined {
-  for (const set of sets) {
-    const hit = set.find((r) => r.name === name);
-    if (hit) return hit;
-  }
-  return undefined;
-}
-
-function jobStatusFrom(sets: EdiabasJobResultLike[][]): string {
-  const r = findResult(sets, 'JOB_STATUS');
-  if (!r) return '';
-  return typeof r.value === 'string' ? r.value : String(r.value);
 }
 
 /**
@@ -108,33 +95,28 @@ export function padFgnrToVin(raw: string): PaddedVin {
 }
 
 export async function readVin(
-  ediabas: EdiabasLike,
+  ediabas: IEdiabas,
   sgbd: string,
 ): Promise<VinReadResult> {
+  let response;
   try {
-    await ediabas.loadSgbd(sgbd);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  let sets: EdiabasJobResultLike[][];
-  try {
-    sets = await ediabas.executeJob(VIN_JOB);
+    /* IEdiabas merges loadSgbd + executeJob into one call. */
+    response = await ediabas.job(sgbd, VIN_JOB);
   } catch (err) {
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     };
   }
-  const jobStatus = jobStatusFrom(sets);
-  if (jobStatus && jobStatus !== 'OKAY') {
-    return { ok: false, jobStatus };
+  const status = jobStatus(response);
+  if (status && status !== 'OKAY') {
+    return { ok: false, jobStatus: status };
   }
-  const r = findResult(sets, VIN_RESULT_NAME);
+  const r = findResult(response, VIN_RESULT_NAME);
   if (!r) {
     return {
       ok: false,
-      jobStatus: jobStatus || 'OKAY',
+      jobStatus: status || 'OKAY',
       error: `${VIN_JOB} ran but no ${VIN_RESULT_NAME} field in response`,
     };
   }
@@ -143,9 +125,9 @@ export async function readVin(
   if (!looksLikeVin(trimmed)) {
     return {
       ok: false,
-      jobStatus: jobStatus || 'OKAY',
+      jobStatus: status || 'OKAY',
       error: `FAHRGESTELL_NR returned "${trimmed}" (not a valid VIN)`,
     };
   }
-  return { ok: true, vin: trimmed, jobStatus: jobStatus || 'OKAY' };
+  return { ok: true, vin: trimmed, jobStatus: status || 'OKAY' };
 }

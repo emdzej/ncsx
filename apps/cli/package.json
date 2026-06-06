@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-cli",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Command-line companion to @emdzej/ncsx-web. First-class commands for working with .ncsxpatch.yaml files and converting to/from NCSEXPER's .MAN format.",
   "main": "dist/cli.js",
   "type": "module",

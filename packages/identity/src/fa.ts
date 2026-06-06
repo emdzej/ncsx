@@ -1,4 +1,8 @@
-import type { EdiabasJobResultLike, EdiabasLike } from '@emdzej/ncsx-wire';
+import {
+  findResult,
+  jobStatus,
+  type IEdiabas,
+} from '@emdzej/ncsx-wire';
 
 /**
  * Job NCSEXPER's `coapiReadAuftrag` (NCSEXPER.EXE `0x0042f800`) issues. **`FA_READ`**
@@ -25,51 +29,29 @@ export interface FaReadResult {
   error?: string;
 }
 
-function findResult(
-  sets: EdiabasJobResultLike[][],
-  name: string,
-): EdiabasJobResultLike | undefined {
-  for (const set of sets) {
-    const hit = set.find((r) => r.name === name);
-    if (hit) return hit;
-  }
-  return undefined;
-}
-
-function jobStatusFrom(sets: EdiabasJobResultLike[][]): string {
-  const r = findResult(sets, 'JOB_STATUS');
-  if (!r) return '';
-  return typeof r.value === 'string' ? r.value : String(r.value);
-}
-
 export async function readFa(
-  ediabas: EdiabasLike,
+  ediabas: IEdiabas,
   sgbd: string,
 ): Promise<FaReadResult> {
+  let response;
   try {
-    await ediabas.loadSgbd(sgbd);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  let sets: EdiabasJobResultLike[][];
-  try {
-    sets = await ediabas.executeJob(FA_JOB);
+    /* IEdiabas merges loadSgbd + executeJob into one call. */
+    response = await ediabas.job(sgbd, FA_JOB);
   } catch (err) {
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     };
   }
-  const jobStatus = jobStatusFrom(sets);
-  if (jobStatus && jobStatus !== 'OKAY') {
-    return { ok: false, jobStatus };
+  const status = jobStatus(response);
+  if (status && status !== 'OKAY') {
+    return { ok: false, jobStatus: status };
   }
-  const r = findResult(sets, FA_RESULT_NAME);
+  const r = findResult(response, FA_RESULT_NAME);
   if (!r) {
     return {
       ok: false,
-      jobStatus: jobStatus || 'OKAY',
+      jobStatus: status || 'OKAY',
       error: `${FA_JOB} ran but no ${FA_RESULT_NAME} field in response`,
     };
   }
@@ -78,9 +60,9 @@ export async function readFa(
   if (trimmed === '') {
     return {
       ok: false,
-      jobStatus: jobStatus || 'OKAY',
+      jobStatus: status || 'OKAY',
       error: `${FA_RESULT_NAME} returned an empty string`,
     };
   }
-  return { ok: true, fa: trimmed, jobStatus: jobStatus || 'OKAY' };
+  return { ok: true, fa: trimmed, jobStatus: status || 'OKAY' };
 }

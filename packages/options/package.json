@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-options",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "CVT DATEN reader — emits an OptionFunctionList of per-(FSW, PSW) AUFTRAGSAUSDRUCK predicate bytes for friendly UI filtering. Mirrors NCSDummy's Classes/Options/OptionListReader. Spec: ../../docs/ncsdummy-analysis.md §3.3.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

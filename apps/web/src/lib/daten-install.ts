@@ -1,6 +1,8 @@
 import { parseDatenFile } from "@emdzej/ncsx-daten";
 import type { ChassisSource } from "@emdzej/ncsx-chassis";
-import { fileSystemAccessChassisSource } from "./fs-chassis-source";
+import type { VirtualDirectory } from "@emdzej/bimmerz-vfs";
+import { drillPath } from "@emdzej/bimmerz-vfs";
+import { virtualDirectoryChassisSource } from "./fs-chassis-source";
 
 /**
  * The two subsystems ncsx actually uses out of a BMW Standard Tools install:
@@ -9,36 +11,38 @@ import { fileSystemAccessChassisSource } from "./fs-chassis-source";
  *     NCSEXPER/          coding ─── DATEN, PFL, SGDAT, CFGDAT, WORK
  *     EDIABAS/           wire   ─── Bin (EDIABAS.INI), Ecu (.prg/.grp SGBDs)
  *
- * EC-APPS/INPA/ also exists in real installs (INPA diagnostic IPOs) but ncsx
- * doesn't consume it — our IPO flow runs `A_*.ipo` dispatchers from
- * `NCSEXPER/SGDAT/`, not INPA's diag scripts. Kept out of the discovery so the
- * UI doesn't suggest we'd use it.
- *
  * The user picks the install root and we drill case-insensitively for each
  * canonical subdirectory. Missing subdirectories are surfaced to the UI rather
  * than treated as hard failures.
+ *
+ * All directories are typed as `VirtualDirectory` from `@emdzej/bimmerz-vfs`,
+ * so the same code works for three backing sources:
+ *
+ *   • Local folder picked via `showDirectoryPicker` → `FsaDirectory`
+ *   • OPFS-imported ZIP bundle → `FsaDirectory` rooted at the bundle dir
+ *   • Remote install served by `bimmerz data index` → `HttpDirectory`
  */
 export interface NcsxInstall {
-  /** The directory the user picked via showDirectoryPicker. */
-  root: FileSystemDirectoryHandle;
+  /** The root the user picked / imported / mounted. */
+  root: VirtualDirectory;
 
   // ── NCSEXPER subsystem (coding) ───────────────────────────────────────────
   /** `<root>/NCSEXPER/DATEN` — chassis DATEN tree (required for coding). */
-  daten: FileSystemDirectoryHandle | null;
+  daten: VirtualDirectory | null;
   /** `<root>/NCSEXPER/SGDAT` — per-SG BEST scripts (`.ipo` files). */
-  ncsSgdat: FileSystemDirectoryHandle | null;
+  ncsSgdat: VirtualDirectory | null;
   /** `<root>/NCSEXPER/CFGDAT` — COAPI.INI, NCSEXPER.INI etc. */
-  ncsCfgdat: FileSystemDirectoryHandle | null;
+  ncsCfgdat: VirtualDirectory | null;
   /** `<root>/NCSEXPER/PFL` — `.pfl` profile files. */
-  pfl: FileSystemDirectoryHandle | null;
+  pfl: VirtualDirectory | null;
   /** `<root>/NCSEXPER/WORK` — where TRC/MAN files traditionally live. */
-  ncsWork: FileSystemDirectoryHandle | null;
+  ncsWork: VirtualDirectory | null;
 
   // ── EDIABAS subsystem (wire / ECU access) ─────────────────────────────────
   /** `<root>/EDIABAS/Ecu` — SGBD `.prg` / `.grp` files. */
-  ediabasEcu: FileSystemDirectoryHandle | null;
+  ediabasEcu: VirtualDirectory | null;
   /** `<root>/EDIABAS/Bin` — EDIABAS.INI + interface DLLs (not needed in browser). */
-  ediabasBin: FileSystemDirectoryHandle | null;
+  ediabasBin: VirtualDirectory | null;
 
   // ── Derived: chassis catalogue (from BR_REF.DAT under daten) ──────────────
   /** Chassis codes listed in BR_REF.DAT, e.g. ["E36", "E46", "E60", …]. */
@@ -71,12 +75,14 @@ export function isWireReady(install: NcsxInstall): boolean {
 
 /**
  * Discover the install layout under `root`. Drills case-insensitively for each
- * canonical subdirectory. Falls back to "the user picked NCSEXPER directly" if
- * there's no NCSEXPER subfolder but there *is* a DATEN one — convenience for
- * folks who copy just the NCSEXPER tree.
+ * canonical subdirectory via VFS's `drillPath` (so the same code handles
+ * Windows-cased dumps, rsync'd lowercased trees, and remote installs whose
+ * `index.json` preserves the on-disk casing). Falls back to "the user picked
+ * NCSEXPER directly" if there's no NCSEXPER subfolder but there *is* a DATEN
+ * one — convenience for folks who copy just the NCSEXPER tree.
  */
 export async function discoverNcsxInstall(
-  root: FileSystemDirectoryHandle,
+  root: VirtualDirectory,
 ): Promise<NcsxInstall> {
   const [
     daten,
@@ -87,45 +93,49 @@ export async function discoverNcsxInstall(
     ediabasEcu,
     ediabasBin,
   ] = await Promise.all([
-    drill(root, ["NCSEXPER", "DATEN"]),
-    drill(root, ["NCSEXPER", "SGDAT"]),
-    drill(root, ["NCSEXPER", "CFGDAT"]),
-    drill(root, ["NCSEXPER", "PFL"]),
-    drill(root, ["NCSEXPER", "WORK"]),
-    drill(root, ["EDIABAS", "Ecu"]),
-    drill(root, ["EDIABAS", "Bin"]),
+    /* drillPath takes VARIADIC segments, not a slash-joined path —
+       passing "NCSEXPER/DATEN" would look for a single directory
+       literally named "NCSEXPER/DATEN". Spread the segments. */
+    drillPath(root, "NCSEXPER", "DATEN"),
+    drillPath(root, "NCSEXPER", "SGDAT"),
+    drillPath(root, "NCSEXPER", "CFGDAT"),
+    drillPath(root, "NCSEXPER", "PFL"),
+    drillPath(root, "NCSEXPER", "WORK"),
+    drillPath(root, "EDIABAS", "Ecu"),
+    drillPath(root, "EDIABAS", "Bin"),
   ]);
 
-  // Fallback: user picked NCSEXPER directly (no NCSEXPER subdir, but DATEN at root level).
+  /* Fallback: user picked NCSEXPER directly (no NCSEXPER subdir, but
+     DATEN at root level). */
   let resolvedDaten = daten;
   let resolvedNcsSgdat = ncsSgdat;
   let resolvedNcsCfgdat = ncsCfgdat;
   let resolvedPfl = pfl;
   let resolvedNcsWork = ncsWork;
   if (!resolvedDaten) {
-    const datenDirect = await drill(root, ["DATEN"]);
+    const datenDirect = await drillPath(root, "DATEN");
     if (datenDirect) {
       resolvedDaten = datenDirect;
-      resolvedNcsSgdat ??= await drill(root, ["SGDAT"]);
-      resolvedNcsCfgdat ??= await drill(root, ["CFGDAT"]);
-      resolvedPfl ??= await drill(root, ["PFL"]);
-      resolvedNcsWork ??= await drill(root, ["WORK"]);
+      resolvedNcsSgdat ??= await drillPath(root, "SGDAT");
+      resolvedNcsCfgdat ??= await drillPath(root, "CFGDAT");
+      resolvedPfl ??= await drillPath(root, "PFL");
+      resolvedNcsWork ??= await drillPath(root, "WORK");
     }
   }
-  // Or: user picked the DATEN folder itself (BR_REF.DAT directly at root).
-  if (!resolvedDaten && (await hasEntry(root, "BR_REF.DAT", "file"))) {
+  /* Or: user picked the DATEN folder itself (BR_REF.DAT directly at root). */
+  if (!resolvedDaten && (await root.file("BR_REF.DAT"))) {
     resolvedDaten = root;
   }
 
   if (!resolvedDaten) {
     throw new NcsxInstallError(
       `Couldn't find BR_REF.DAT under "${root.name}". Point us at the BMW Standard ` +
-        `Tools install root (the folder containing NCSEXPER/, EDIABAS/, EC-APPS/) or at ` +
-        `NCSEXPER/ directly.`,
+        `Tools install root (the folder containing NCSEXPER/, EDIABAS/, EC-APPS/), ` +
+        `at NCSEXPER/ directly, or at a remote install index URL.`,
     );
   }
 
-  const datenSource = fileSystemAccessChassisSource(resolvedDaten);
+  const datenSource = virtualDirectoryChassisSource(resolvedDaten);
   const chassisCodes = await readChassisCodes(datenSource);
 
   return {
@@ -165,41 +175,4 @@ async function readChassisCodes(source: ChassisSource): Promise<string[]> {
   } catch {
     return [];
   }
-}
-
-/**
- * Drill down a multi-segment path case-insensitively. Returns null if any
- * segment doesn't exist. Real installs vary on segment casing depending on
- * which OS the files were last touched.
- */
-async function drill(
-  start: FileSystemDirectoryHandle,
-  segments: string[],
-): Promise<FileSystemDirectoryHandle | null> {
-  let current: FileSystemDirectoryHandle = start;
-  for (const segment of segments) {
-    const target = segment.toLowerCase();
-    let found: FileSystemDirectoryHandle | null = null;
-    for await (const [name, entry] of current.entries()) {
-      if (entry.kind === "directory" && name.toLowerCase() === target) {
-        found = entry as FileSystemDirectoryHandle;
-        break;
-      }
-    }
-    if (!found) return null;
-    current = found;
-  }
-  return current;
-}
-
-async function hasEntry(
-  handle: FileSystemDirectoryHandle,
-  name: string,
-  kind: "file" | "directory",
-): Promise<boolean> {
-  const target = name.toLowerCase();
-  for await (const [entryName, entry] of handle.entries()) {
-    if (entryName.toLowerCase() === target && entry.kind === kind) return true;
-  }
-  return false;
 }

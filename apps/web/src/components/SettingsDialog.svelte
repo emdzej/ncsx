@@ -5,11 +5,19 @@
     saveConfig,
     type LogLevel,
   } from "../lib/config";
-  import { InterfaceConfigPanel } from "@emdzej/ediabasx-web-ui";
+  import {
+    InterfaceConfigPanel,
+    ModeConfigPanel,
+    ServerConfigPanel,
+    ConnectConfigPanel,
+  } from "@emdzej/ediabasx-web-ui";
   import {
     clearInstallHandle,
     saveInstallHandle,
+    clearRemoteInstallUrl,
   } from "../lib/install-storage";
+  import { clearInstallSource, setInstallSource } from "../lib/bundled-install";
+  import { FsaDirectory } from "@emdzej/bimmerz-vfs";
   import { discoverNcsxInstall } from "../lib/daten-install";
   import { app } from "../lib/state.svelte";
   import { applyLoggerConfig } from "../lib/logger-wiring";
@@ -96,7 +104,13 @@
 
   async function forgetInstall(): Promise<void> {
     await clearInstallHandle();
+    /* Forget across all three source paths — the remote URL marker
+       lived independently and used to survive "Forget" silently
+       re-mounting the same remote on next load. */
+    clearRemoteInstallUrl();
+    clearInstallSource();
     app.install = null;
+    app.installSource = null;
     clearDerivedInstallState();
     app.view = "picker";
     app.showSettings = false;
@@ -105,10 +119,17 @@
   async function changeInstall(): Promise<void> {
     try {
       const handle = await window.showDirectoryPicker({ mode: "read" });
-      const install = await discoverNcsxInstall(handle);
+      /* Wrap in FsaDirectory so the install discovery + downstream
+         readers all see one `VirtualDirectory` shape regardless of
+         whether the user picks local or mounts remote. */
+      const install = await discoverNcsxInstall(new FsaDirectory(handle));
       app.install = install;
       clearDerivedInstallState();
       await saveInstallHandle(handle);
+      /* Picking a new folder supersedes any prior remote-URL pin. */
+      clearRemoteInstallUrl();
+      setInstallSource({ source: "fs-access" });
+      app.installSource = { source: "fs-access" };
       app.view = "browse-chassis";
       app.showSettings = false;
     } catch (err) {
@@ -178,9 +199,23 @@
 
       <section class="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm text-foreground">
         {#if activeTab === "connection"}
-        <!-- Interface selector + per-interface fieldsets — shared
-             across the bimmerz family via @emdzej/ediabasx-web-ui. -->
-        <InterfaceConfigPanel bind:config={app.config} />
+        <!-- Mode toggle — embedded (local cable) vs client (remote
+             ediabasx-server via WebSocket or Bimmerz Connect relay).
+             The fieldsets below branch on this. -->
+        <ModeConfigPanel bind:config={app.config} />
+
+        {#if app.config.mode === "client"}
+          <!-- Client mode: direct WebSocket vs Bimmerz Connect relay,
+               plus the relevant URL field. The session-token blob
+               for Bimmerz Connect is prompted by ConnectSessionDialog
+               on Connect — transient, never persisted to settings. -->
+          <ConnectConfigPanel bind:config={app.config} />
+          <ServerConfigPanel bind:config={app.config} />
+        {:else}
+          <!-- Embedded mode: pick a local EDIABAS interface. Shared
+               across the bimmerz family via @emdzej/ediabasx-web-ui. -->
+          <InterfaceConfigPanel bind:config={app.config} />
+        {/if}
 
 
         {:else if activeTab === "data"}

@@ -1,4 +1,8 @@
-import type { EdiabasJobResultLike, EdiabasLike } from '@emdzej/ncsx-wire';
+import {
+  findResult,
+  jobStatus,
+  type IEdiabas,
+} from '@emdzej/ncsx-wire';
 
 /**
  * Job NCSEXPER's `coapiReadZcs` (NCSEXPER.EXE `0x0042b6e0`) issues. Verified via the
@@ -39,54 +43,33 @@ export interface ZcsReadResult {
   error?: string;
 }
 
-function findResult(
-  sets: EdiabasJobResultLike[][],
-  name: string,
-): EdiabasJobResultLike | undefined {
-  for (const set of sets) {
-    const hit = set.find((r) => r.name === name);
-    if (hit) return hit;
-  }
-  return undefined;
-}
-
-function jobStatusFrom(sets: EdiabasJobResultLike[][]): string {
-  const r = findResult(sets, 'JOB_STATUS');
-  if (!r) return '';
-  return typeof r.value === 'string' ? r.value : String(r.value);
-}
-
 function asString(value: unknown): string {
   if (value === undefined || value === null) return '';
   return typeof value === 'string' ? value : String(value);
 }
 
 export async function readZcs(
-  ediabas: EdiabasLike,
+  ediabas: IEdiabas,
   sgbd: string,
 ): Promise<ZcsReadResult> {
+  let response;
   try {
-    await ediabas.loadSgbd(sgbd);
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  let sets: EdiabasJobResultLike[][];
-  try {
-    sets = await ediabas.executeJob(ZCS_JOB);
+    /* IEdiabas merges loadSgbd + executeJob into a single call —
+       the ECU name is the first arg, no separate "load then run". */
+    response = await ediabas.job(sgbd, ZCS_JOB);
   } catch (err) {
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     };
   }
-  const jobStatus = jobStatusFrom(sets);
-  if (jobStatus && jobStatus !== 'OKAY') {
-    return { ok: false, jobStatus };
+  const status = jobStatus(response);
+  if (status && status !== 'OKAY') {
+    return { ok: false, jobStatus: status };
   }
-  const gm = findResult(sets, RESULT_GM);
-  const sa = findResult(sets, RESULT_SA);
-  const vn = findResult(sets, RESULT_VN);
+  const gm = findResult(response, RESULT_GM);
+  const sa = findResult(response, RESULT_SA);
+  const vn = findResult(response, RESULT_VN);
   if (!gm || !sa || !vn) {
     const missing = [
       !gm && RESULT_GM,
@@ -97,13 +80,13 @@ export async function readZcs(
       .join(', ');
     return {
       ok: false,
-      jobStatus: jobStatus || 'OKAY',
+      jobStatus: status || 'OKAY',
       error: `${ZCS_JOB} ran but missing fields: ${missing}`,
     };
   }
   return {
     ok: true,
-    jobStatus: jobStatus || 'OKAY',
+    jobStatus: status || 'OKAY',
     zcs: {
       gm: asString(gm.value).trim(),
       sa: asString(sa.value).trim(),

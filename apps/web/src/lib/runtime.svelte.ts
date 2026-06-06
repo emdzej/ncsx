@@ -16,8 +16,9 @@
  *     Functions in ncsx will need ncsx-side ScreenCanvas + FKeyBar components
  *     fed by `WebUIProvider`. The provider is already wired; the consumer
  *     components don't exist yet. Tracked as a future task.
- * - We reuse the live `Ediabas` instance from `connection.session.ediabas` rather
- *   than creating a second one (would clash on the serial port).
+ * - We reuse the live `IEdiabas` from `connection.session.ediabas` rather
+ *   than creating a second one (would clash on the serial port in
+ *   embedded mode, or open a duplicate JSON-RPC channel in client mode).
  * - **Missing**: the CABI provider — NCSEXPER's `A_*.ipo` calls `CDHGetCabdName`,
  *   `CDHapiJob`, etc. via the CABI bridge (101 functions, statically linked in
  *   NCSEXPER.EXE). Until `packages/inpax-cabi-provider` lands (task #51), CABI
@@ -45,7 +46,7 @@ import {
   NullSpsProvider,
 } from "@emdzej/inpax-providers/null";
 import { EdiabasXProvider, Inp1Adapter } from "@emdzej/inpax-ediabasx-provider";
-import { Ediabas, type EdiabasConfig } from "@emdzej/ediabasx-ediabas";
+import type { IEdiabas } from "@emdzej/ediabasx-core";
 import { app } from "./state.svelte";
 import { connection } from "./ediabas-session.svelte";
 
@@ -94,17 +95,17 @@ export async function loadIpoBytes(basename: string): Promise<Uint8Array> {
   if (!app.install?.ncsSgdat) {
     throw new Error("No NCSEXPER/SGDAT directory in the picked install");
   }
-  const wantedUpper = `${basename}.IPO`.toUpperCase();
-  for await (const [name, handle] of app.install.ncsSgdat.entries()) {
-    if (handle.kind !== "file") continue;
-    if (name.toUpperCase() === wantedUpper) {
-      const file = await handle.getFile();
-      return new Uint8Array(await file.arrayBuffer());
-    }
+  /* VFS `dir.file()` is case-insensitive by contract (FsaDirectory
+     scans `entries()` for a case-insensitive match; HttpDirectory's
+     `index.json` listings preserve on-disk casing and the impl
+     compares via toLowerCase). One lookup, no manual enumeration. */
+  const file = await app.install.ncsSgdat.file(`${basename}.IPO`);
+  if (!file) {
+    throw new Error(
+      `IPO not found: ${basename}.IPO — checked ${app.install.ncsSgdat.name}`,
+    );
   }
-  throw new Error(
-    `IPO not found: ${basename}.IPO — checked ${app.install.ncsSgdat.name}`,
-  );
+  return new Uint8Array(await file.arrayBuffer());
 }
 
 export interface StartNcsRuntimeOptions {
@@ -157,20 +158,15 @@ export async function startNcsRuntime(
   const ui = new NullUIProvider();
   const external = new NullExternalProvider();
 
-  // 3. EDIABAS — wrap the live instance from connection.session. `getTransport`
-  //    returns null until the user connects; once connected, the provider's
-  //    init() (driven by the IPO's `__inpa_startup__` or by us calling `ensure`)
-  //    pulls the active transport.
-  const ediabasInstance: Ediabas = connection.session.ediabas;
+  // 3. EDIABAS — wrap the live IEdiabas from connection.session. Same
+  //    `IEdiabas` shape whether it's an `EmbeddedEdiabas` (local cable)
+  //    or an `EdiabasClient` (remote server or Bimmerz Connect relay)
+  //    — the provider doesn't distinguish. Provider 0.11.1 dropped
+  //    the legacy `getTransport` hook (transport is now an interface
+  //    config concern inside Ediabas, not provider-managed).
+  const ediabasInstance: IEdiabas = connection.session.ediabas;
   const ediabasProvider = new EdiabasXProvider({
     instance: ediabasInstance,
-    // Inpax doesn't need to manage the transport — we already own it.
-    // Returning null at connection time would make init() fail; instead we
-    // return a constant truthy reference that the wrapper can re-use.
-    getTransport: () =>
-      (connection.session?.ediabas as unknown as {
-        transport?: EdiabasConfig["transport"];
-      }).transport ?? null,
   });
   const inp1 = new Inp1Adapter(ediabasProvider);
 

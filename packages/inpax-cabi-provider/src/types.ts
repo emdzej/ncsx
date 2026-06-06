@@ -5,7 +5,7 @@
  * uniform; pure-data getters just `Promise.resolve(...)`.
  */
 
-import type { EdiabasLike } from '@emdzej/ncsx-wire';
+import type { IEdiabas } from '@emdzej/ncsx-wire';
 import type { Chassis } from '@emdzej/ncsx-chassis';
 
 /**
@@ -26,8 +26,8 @@ export interface CdhResult<T = void> {
  * CDH implementations read/write.
  */
 export interface CdhContext {
-  /** The connected Ediabas instance — `CDHapiJob` delegates here. */
-  ediabas: EdiabasLike | null;
+  /** The connected IEdiabas instance — `CDHapiJob` delegates here. */
+  ediabas: IEdiabas | null;
   /** Active chassis (BR_REF row, SGFAM, SWT tables, …). */
   chassis: Chassis | null;
   /**

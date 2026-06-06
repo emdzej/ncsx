@@ -1,4 +1,5 @@
-import { Ediabas, type EdiabasConfig } from '@emdzej/ediabasx-ediabas';
+import { EmbeddedEdiabas, EdiabasClient } from '@emdzej/ediabasx-client';
+import type { IEdiabas } from '@emdzej/ediabasx-core';
 import {
   SerialInterface,
   WebSerialTransport,
@@ -7,18 +8,24 @@ import {
 import { J2534Interface } from '@emdzej/ediabasx-interface-j2534';
 import { WebSerialTransport as J2534WebSerialTransport } from '@emdzej/j2534-webserial';
 import { GatewayClient } from '@emdzej/ediabasx-interfaces/client';
+import { dial as dialConnect } from '@emdzej/swsrs-client';
 import { makeBrowserSgbdResolver } from './sgbd-resolver';
 import { app } from './state.svelte';
 
-/** Any transport `Ediabas` accepts — SerialInterface, J2534Interface, or GatewayClient. */
-type AnyEdiabasTransport = EdiabasConfig['transport'];
-
 /**
- * One ECU session: a connected `Ediabas` instance plus its underlying SerialInterface.
- * `disconnect()` tears the whole thing down so the next connection starts clean.
+ * One ECU session: a connected `IEdiabas` instance plus the teardown
+ * thunk that closes whatever underlying transport / socket the
+ * instance is using.
+ *
+ * Embedded mode wraps `EmbeddedEdiabas` (which wraps the inner
+ * `Ediabas` class against a local interface — Web Serial / J2534 /
+ * gateway). Client mode wraps `EdiabasClient` (JSON-RPC over
+ * WebSocket — direct to a server, or via the Bimmerz Connect relay).
+ * Both implement `IEdiabas`, so downstream code (cabi-provider,
+ * runtime, identity readers) doesn't care which mode is active.
  */
 export interface EdiabasSession {
-  readonly ediabas: Ediabas;
+  readonly ediabas: IEdiabas;
   disconnect(): Promise<void>;
 }
 
@@ -62,31 +69,44 @@ function getNavigatorSerial(): WebNavigatorSerial | null {
 }
 
 /**
- * Open a connection based on the user's `app.config.interface` setting:
+ * Open a connection based on the user's `app.config.mode` + interface
+ * setting:
  *
- *   - `webserial` — prompt for a Web Serial port, drive it as a
- *                   K+DCAN-style cable via SerialInterface.
- *   - `j2534`     — drive a Tactrix OpenPort 2.0 via J2534Interface
- *                   (uses Web Serial under the hood — same gesture
- *                   requirement; the port picker pops on connect).
- *   - `gateway`   — talk WebSocket to a remote ediabasx gateway.
+ *   - `embedded` + `webserial` — local Web Serial cable via SerialInterface.
+ *   - `embedded` + `j2534`     — local Tactrix OpenPort 2.0 via J2534Interface.
+ *   - `embedded` + `gateway`   — remote ediabasx gateway via WebSocket
+ *                                (still embedded — we own the IEdiabas;
+ *                                gateway only forwards the wire).
+ *   - `client`   + `server`    — remote ediabasx-server, direct WebSocket.
+ *   - `client`   + `connect`   — remote ediabasx-server via Bimmerz
+ *                                Connect relay (sessionId.token from
+ *                                `ediabasx serve --connect`).
  *
- * Sets `connection.session` on success, `connection.status = error` on
- * failure. Requires `app.install.ediabasEcu` to be set.
+ * In `embedded` mode `app.install.ediabasEcu` is required (SGBD bytes
+ * resolved client-side via the browser resolver). In `client` mode the
+ * server owns the SGBD catalogue — no SGBD resolver needed here.
  */
 export async function connect(): Promise<void> {
-  if (!app.install?.ediabasEcu) {
-    connection.status = {
-      kind: 'error',
-      message:
-        'No EDIABAS/Ecu folder found in the install. Pick a BMW Standard Tools root that contains EDIABAS/Ecu.',
-    };
-    return;
-  }
-
   connection.status = { kind: 'connecting' };
 
   try {
+    if (app.config.mode === 'client') {
+      if (app.config.connectionMethod === 'connect') {
+        await connectBimmerzConnectImpl();
+      } else {
+        await connectServerImpl();  /* default: direct WebSocket */
+      }
+      return;
+    }
+
+    /* embedded mode — local cable. ediabasEcu folder is required so
+       loadSgbd can find the bytes. */
+    if (!app.install?.ediabasEcu) {
+      throw new Error(
+        'No EDIABAS/Ecu folder found in the install. Pick a BMW Standard Tools root that contains EDIABAS/Ecu.',
+      );
+    }
+
     if (app.config.interface === 'webserial') {
       await connectWebSerialImpl();
     } else if (app.config.interface === 'j2534') {
@@ -126,7 +146,7 @@ async function connectWebSerialImpl(): Promise<void> {
   // survive reloads. Defaults match the K+DCAN-cable consensus that
   // inpax-web ships.
   const s = app.config.serial ?? {};
-  const transport = new SerialInterface({
+  const iface = new SerialInterface({
     port: 'webserial',
     baudRate: s.baudRate ?? 115200,
     dataBits: (s.dataBits ?? 8) as 7 | 8,
@@ -137,7 +157,7 @@ async function connectWebSerialImpl(): Promise<void> {
     probeAdapterOnConnect: s.probeAdapterOnConnect ?? true,
   });
 
-  await startSession(transport as unknown as AnyEdiabasTransport, async () => {
+  await startEmbeddedSession(iface, async () => {
     try {
       await (port as unknown as { close?: () => Promise<void> }).close?.();
     } catch {
@@ -155,13 +175,14 @@ async function connectJ2534Impl(): Promise<void> {
   // the user's Connect gesture). DS2 @ 9600 is the seed; the SGBD's
   // INITIALISIERUNG reconfigures via setCommParameter.
   const j2534Transport = new J2534WebSerialTransport();
-  const transport = new J2534Interface({
+  const iface = new J2534Interface({
     transport: { kind: 'instance', transport: j2534Transport },
     protocol: 'ds2',
     baudRate: 9600,
   });
-  await startSession(transport as unknown as AnyEdiabasTransport, async () => {
-    // J2534Interface.disconnect() closes its transport; no extra cleanup.
+  await startEmbeddedSession(iface, async () => {
+    /* J2534Interface.disconnect() (via Ediabas.end()) closes its
+       transport; no extra cleanup. */
   }, 'J2534 (OpenPort 2.0)');
 }
 
@@ -173,12 +194,87 @@ async function connectGatewayImpl(): Promise<void> {
   if (!/^wss?:\/\//i.test(url)) {
     throw new Error('Gateway URL must start with ws:// or wss://');
   }
-  // The remote ediabasx gateway owns the actual hardware link; we
-  // just speak JSON-RPC over WebSocket to it.
-  const client = new GatewayClient({ transport: 'websocket', url });
-  await startSession(client as unknown as AnyEdiabasTransport, async () => {
-    // GatewayClient.disconnect() handled by Ediabas.disconnect().
+  /* The remote ediabasx gateway owns the actual hardware link; we
+     just speak the EDIABAS protocol over WebSocket to it. Treated as
+     an "interface" from EmbeddedEdiabas's point of view — the
+     IEdiabas itself runs locally and the gateway only forwards the
+     wire. (Distinct from client mode below, where the IEdiabas
+     itself lives on the remote.) */
+  const iface = new GatewayClient({ transport: 'websocket', url });
+  await startEmbeddedSession(iface, async () => {
+    /* GatewayClient.disconnect() handled by Ediabas.end(). */
   }, `Gateway · ${url}`);
+}
+
+async function connectServerImpl(): Promise<void> {
+  const url = app.config.serverUrl?.trim();
+  if (!url) {
+    throw new Error('Server URL is empty — set ws://host:port in Settings');
+  }
+  if (!/^wss?:\/\//i.test(url)) {
+    throw new Error('Server URL must start with ws:// or wss://');
+  }
+  /* Direct WebSocket to an ediabasx-server. The server owns the
+     cable + SGBDs; we just speak JSON-RPC to it. */
+  const client = new EdiabasClient({ transport: 'websocket', url });
+  try {
+    await client.init();
+  } catch (err) {
+    /* Make sure the socket is torn down before bubbling the error
+       so a re-Connect doesn't hit a stale half-open connection. */
+    try {
+      await client.end();
+    } catch { /* swallow */ }
+    throw err;
+  }
+  connection.session = {
+    ediabas: client,
+    disconnect: async () => {
+      try {
+        await client.end();
+      } catch { /* swallow */ }
+    },
+  };
+  connection.status = { kind: 'connected', portInfo: `Server · ${url}` };
+}
+
+async function connectBimmerzConnectImpl(): Promise<void> {
+  const sessionId = app.connectSessionId?.trim() ?? '';
+  const token = app.connectToken?.trim() ?? '';
+  if (!sessionId || !token) {
+    /* No token paste yet — pop the dialog and bail. The dialog
+       calls back into connect() once the user submits, at which
+       point we hit the dial path below. */
+    connection.status = { kind: 'disconnected' };
+    app.showConnectSession = true;
+    return;
+  }
+  const relayUrl = app.config.connectRelayUrl?.trim() || 'wss://connect.bimmerz.app';
+  /* Dial the relay, get a tunnelled WebSocket, hand it to
+     EdiabasClient. The relay forwards bytes between the dialing
+     client (us) and the host that called `ediabasx serve --connect`. */
+  const peer = await dialConnect({ relayURL: relayUrl, sessionId, token });
+  const client = new EdiabasClient({ transport: 'websocket', socket: peer.socket });
+  try {
+    await client.init();
+  } catch (err) {
+    try {
+      await client.end();
+    } catch { /* swallow */ }
+    throw err;
+  }
+  connection.session = {
+    ediabas: client,
+    disconnect: async () => {
+      try {
+        await client.end();
+      } catch { /* swallow */ }
+    },
+  };
+  connection.status = {
+    kind: 'connected',
+    portInfo: `Bimmerz Connect · ${relayUrl}`,
+  };
 }
 
 function portLabelFromWebSerial(port: WebSerialPortLike): string {
@@ -191,21 +287,27 @@ function portLabelFromWebSerial(port: WebSerialPortLike): string {
     : 'Serial port';
 }
 
-async function startSession(
-  transport: AnyEdiabasTransport,
+/**
+ * Build an `EmbeddedEdiabas` over the supplied interface and stash it
+ * on `connection.session`. The IEdiabas owns SGBD loading + IDENT
+ * bootstrap + the run-loop; we just wire the EDIABAS/Ecu resolver to
+ * read SGBD bytes out of the user-picked install folder.
+ */
+async function startEmbeddedSession(
+  iface: ConstructorParameters<typeof EmbeddedEdiabas>[0]['interface'],
   closeTransport: () => Promise<void>,
   portInfo: string,
 ): Promise<void> {
   if (!app.install?.ediabasEcu) {
     throw new Error('No EDIABAS/Ecu folder found in the install.');
   }
-  const ediabas = new Ediabas({
-    ecuPath: '.',
-    transport,
+  const ediabas = new EmbeddedEdiabas({
+    sgbdPath: '.',
+    interface: iface,
     loadSgbdResolver: makeBrowserSgbdResolver(app.install.ediabasEcu),
   });
   try {
-    await ediabas.connect();
+    await ediabas.init();
   } catch (err) {
     await closeTransport();
     throw err;
@@ -214,7 +316,7 @@ async function startSession(
     ediabas,
     disconnect: async () => {
       try {
-        await ediabas.disconnect();
+        await ediabas.end();
       } catch {
         /* swallow — best-effort */
       }
@@ -231,4 +333,10 @@ export async function disconnect(): Promise<void> {
   }
   connection.session = null;
   connection.status = { kind: 'disconnected' };
+  /* Clear the transient Bimmerz Connect session — the relay host
+     prints a fresh `sessionId.token` per session, so a stale token
+     in memory would just fail to dial next time. Forces the user
+     through the dialog again, which is the safe default. */
+  app.connectSessionId = null;
+  app.connectToken = null;
 }

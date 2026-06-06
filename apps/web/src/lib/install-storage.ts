@@ -131,3 +131,33 @@ export async function requestHandlePermission(
 export function isFileSystemAccessSupported(): boolean {
   return typeof window !== "undefined" && "showDirectoryPicker" in window;
 }
+
+/* ── Remote install URL ──────────────────────────────────────────── */
+
+/**
+ * Persisted URL for a remote install — a tree of `index.json` files
+ * served via HTTP and walked by `HttpDirectory` from
+ * `@emdzej/bimmerz-vfs`. Stored in localStorage (URLs are short
+ * strings, no need for IndexedDB) and restored on app boot the same
+ * way the FSA handle is.
+ *
+ * The session-blob equivalent for client mode (`sessionId.token`)
+ * stays transient on `app.connectSessionId` — that's a credential.
+ * A remote install URL is just a location pointer, safe to persist.
+ */
+const REMOTE_URL_KEY = "ncsx.web.install.remoteUrl";
+
+export function saveRemoteInstallUrl(url: string): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(REMOTE_URL_KEY, url);
+}
+
+export function loadRemoteInstallUrl(): string | null {
+  if (typeof localStorage === "undefined") return null;
+  return localStorage.getItem(REMOTE_URL_KEY);
+}
+
+export function clearRemoteInstallUrl(): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.removeItem(REMOTE_URL_KEY);
+}

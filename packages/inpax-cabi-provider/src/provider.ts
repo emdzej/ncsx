@@ -34,6 +34,12 @@ import {
 import type { CdhContext, CdhResult } from './types.js';
 import { tokenizeFa } from '@emdzej/ncsx-fa-asw';
 import { getLogger } from '@emdzej/bimmerz-logger';
+import {
+  dataSets,
+  jobStatus as readJobStatusFromResponse,
+  type EdiabasJobResponse,
+  type EdiabasResultEntry,
+} from '@emdzej/ncsx-wire';
 
 // Diagnostic logger for the CDH dispatch tap. Every CDH* call site
 // can route through `log.debug({...}, "msg")` — visibility is then
@@ -75,6 +81,44 @@ function coerceBytes(value: unknown): Uint8Array | null {
     return out;
   }
   return null;
+}
+
+/**
+ * Convert IEdiabas's `EdiabasJobResponse.sets` (where `sets[0]` is the
+ * system set with VARIANTE/OBJECT/JOBNAME/JOB_STATUS metadata, and
+ * `sets[1..N]` are the SGBD's data sets) into the legacy data-only
+ * `Map<name, value>[]` shape the CDH readers expect.
+ *
+ * Binary values arrive as `number[]` (JSON-safe — wire-portable for
+ * client mode) but the CABI dispatch logic checks `instanceof
+ * Uint8Array` in places, so we hoist binary entries back to
+ * `Uint8Array` here. Strings and numbers pass through as-is.
+ */
+function materializeDataSets(
+  response: EdiabasJobResponse,
+): Array<Map<string, unknown>> {
+  return dataSets(response).map((set) => {
+    const map = new Map<string, unknown>();
+    for (const name of Object.keys(set)) {
+      const entry = set[name] as EdiabasResultEntry;
+      let value: unknown = entry.value;
+      if (entry.type === 'binary' && Array.isArray(value)) {
+        value = Uint8Array.from(value as number[]);
+      }
+      map.set(name, value);
+    }
+    return map;
+  });
+}
+
+/**
+ * `JOB_STATUS` reader. IEdiabas plants it in the system set
+ * (`sets[0]`) via the inner `Ediabas` class's `buildSystemSet`.
+ * Re-exports the helper from `@emdzej/ncsx-wire` so callers can
+ * import the cabi-provider without also importing ncsx-wire.
+ */
+function readJobStatus(response: EdiabasJobResponse): string {
+  return readJobStatusFromResponse(response);
 }
 
 export class CdhNotImplementedError extends Error {
@@ -238,42 +282,32 @@ export class CabiProvider {
     if (!this.ctx.ediabas) return { retVal: COAPI_DIABAS_INIT_ERROR };
     if (!ecu || !job) return { retVal: COAPI_PAR_ERROR };
     try {
-      await this.ctx.ediabas.loadSgbd(ecu);
       // NCSEXPER's CABI convention — and BMW EDIABAS more generally —
       // packs multiple BEST2 `par(N)` slots into a single semicolon-
       // delimited `para` string. EDIABAS splits it on `;` before the
       // SGBD's bytecode runs so `par(0)`, `par(1)`, … `par(N)` are
-      // individually addressable.
+      // individually addressable. IEdiabas.job accepts the string
+      // directly (it splits internally), so we just hand the para
+      // string through — no pre-split here.
       //
-      // The canonical anchor for this is `FA_STREAM2STRUCT` (FA.PRG):
-      // the IPO builds `para = "1;<FA_BYTES>"` expecting `par(0)="1"`
-      // (the BLOCK indicator) and `par(1)=<FA_BYTES>`. Passing the
-      // whole `"1;<FA_BYTES>"` as a single array element makes the
-      // SGBD see `par(0)="1;<bytes>"` and `par(1)=""`, which fails the
-      // length check and returns `ERROR_NO_FA`.
-      //
-      // inpax fixed the same bug in 0.5.1 for `INPAapiJob`:
+      // The canonical anchor is `FA_STREAM2STRUCT` (FA.PRG): the IPO
+      // builds `para = "1;<FA_BYTES>"` expecting `par(0)="1"` (BLOCK
+      // indicator) and `par(1)=<FA_BYTES>`. Inpax fixed the same in
+      // 0.5.1 for `INPAapiJob`:
       //   • STEUERN_ANZEIGE  para="TACHO;40"           → par(0)="TACHO", par(1)="40"
       //   • STEUERN_LEUCHTE  para="0xFF;0xFF;0xFF;…"   → par(0..5)="0xFF"
       //   • FA_STREAM2STRUCT para="1;<FA_BYTES>"        → par(0)="1", par(1)=<bytes>
       //   • IDENT            para=""                    → no params
-      const params = para === '' ? [] : para.split(';');
       // Diagnostic tap — logs every SGBD job dispatch so the browser
       // console can be diffed against NCSEXPER's ABLAUF.TRC when a
       // job hits an unexpected error path. Remove when the write
       // flow stabilises.
       log.debug(
-        `[CDHapiJob] ecu=${ecu} job=${job} params(${params.length})=[${params.map((p) => JSON.stringify(p)).join(", ")}]`,
+        `[CDHapiJob] ecu=${ecu} job=${job} para=${JSON.stringify(para)}`,
       );
-      const sets = await this.ctx.ediabas.executeJob(job, { params });
-      this.lastJob.sets = sets.map((set) => {
-        const map = new Map<string, unknown>();
-        for (const r of set) map.set(r.name, r.value);
-        return map;
-      });
-      const jobStatus = this.findResult('JOB_STATUS');
-      this.lastJob.jobStatus =
-        typeof jobStatus === 'string' ? jobStatus : String(jobStatus ?? '');
+      const response = await this.ctx.ediabas.job(ecu, job, para);
+      this.lastJob.sets = materializeDataSets(response);
+      this.lastJob.jobStatus = readJobStatus(response);
       // Response-side trace — mirrors the CDHapiJobData pattern. Without
       // this the console only shows the dispatch, leaving "did the SGBD
       // answer? what did it return?" invisible to anyone debugging an
@@ -292,7 +326,7 @@ export class CabiProvider {
         return `set[${i}]{${entries.join(', ')}}`;
       });
       log.debug(
-        `[CDHapiJob] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${sets.length} ${setsSummary.join(' | ')}`,
+        `[CDHapiJob] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${this.lastJob.sets.length} ${setsSummary.join(' | ')}`,
       );
       return { retVal: COAPI_OK };
     } catch (err) {
@@ -640,16 +674,16 @@ export class CabiProvider {
       `[CDHapiJobData] ecu=${ecu} job=${job} bufHandle=${bufHandle} buf.size=${buf.size} bytes=${bytesToHex(para)}`,
     );
     try {
-      await this.ctx.ediabas.loadSgbd(ecu);
-      const sets = await this.ctx.ediabas.executeJob(job, { params: [para] });
-      this.lastJob.sets = sets.map((set) => {
-        const map = new Map<string, unknown>();
-        for (const r of set) map.set(r.name, r.value);
-        return map;
-      });
-      const jobStatus = this.findResult('JOB_STATUS');
-      this.lastJob.jobStatus =
-        typeof jobStatus === 'string' ? jobStatus : String(jobStatus ?? '');
+      /* IEdiabas.job (since ediabasx 0.7.1) takes binary params
+         directly on the apiJobData channel — a `Uint8Array` lands in
+         the SGBD's `pary` / `parb` / `parw` / `parl` / `parr` reads
+         instead of the indexed-string channel. Critical for NCS
+         coding writes (C_S_AUFTRAG etc.) — hex-encoding into a
+         string param would route into `pari` and trip
+         `ERROR_NO_BIN_BUFFER`. */
+      const response = await this.ctx.ediabas.job(ecu, job, para);
+      this.lastJob.sets = materializeDataSets(response);
+      this.lastJob.jobStatus = readJobStatus(response);
       // Diagnostic — full sets dump. Helps when JOB_STATUS alone isn't
       // enough (e.g. ERROR_BIN_BUFFER could be triggered by the input
       // length check OR the response length check, and the secondary
@@ -668,7 +702,7 @@ export class CabiProvider {
         return `set[${i}]{${entries.join(', ')}}`;
       });
       log.debug(
-        `[CDHapiJobData] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${sets.length} ${setsSummary.join(' | ')}`,
+        `[CDHapiJobData] ← job=${job} JOB_STATUS=${this.lastJob.jobStatus} sets=${this.lastJob.sets.length} ${setsSummary.join(' | ')}`,
       );
       return { retVal: COAPI_OK };
     } catch (err) {

@@ -5,6 +5,7 @@ import type { SgfamRow } from "@emdzej/ncsx-text-tables";
 import type { TranslationFile } from "@emdzej/ncsx-translations";
 import { loadConfig, type WebConfig } from "./config";
 import type { NcsxInstall } from "./daten-install";
+import { getInstallSource, type InstallSource } from "./bundled-install";
 
 /**
  * Result of reading the chassis-identity payload. FA and ZCS are
@@ -107,7 +108,28 @@ interface AppState {
   showFgnrEditor: boolean;
   /** Whether the About dialog is open. */
   showAbout: boolean;
+  /** Whether the Bimmerz Connect session-token dialog is open. */
+  showConnectSession: boolean;
+  /**
+   * Bimmerz Connect: transient session ID (not persisted). Set by
+   * the connect-session dialog after the user pastes the
+   * `sessionId.token` blob; cleared on disconnect. Lives outside
+   * `config` because a session token shouldn't survive a reload —
+   * the relay host re-prints it per session.
+   */
+  connectSessionId: string | null;
+  /** Bimmerz Connect: transient initiator token (not persisted). */
+  connectToken: string | null;
   install: NcsxInstall | null;
+  /**
+   * Where the currently-loaded install came from — FSA folder pick,
+   * OPFS bundle import (reserved — not yet shipped), or remote VFS
+   * URL. Reactive mirror of the localStorage marker
+   * (`getInstallSource()`); the top-bar source pill reads from here
+   * so the chip updates mid-session when the user switches sources
+   * without reloading the page.
+   */
+  installSource: InstallSource | null;
   chassis: Chassis | null;
   /** Display label of the currently-viewed module (formatted as `KMB_E46.C06`). */
   selectedSg: string | null;
@@ -163,7 +185,11 @@ export const app: AppState = $state({
   showZcsEditor: false,
   showFgnrEditor: false,
   showAbout: false,
+  showConnectSession: false,
+  connectSessionId: null,
+  connectToken: null,
   install: null,
+  installSource: getInstallSource(),
   chassis: null,
   selectedSg: null,
   selectedModule: null,

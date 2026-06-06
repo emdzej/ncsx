@@ -3,6 +3,7 @@
   import { getLogger } from "@emdzej/bimmerz-logger";
   import { parseTranslationsCsv } from "@emdzej/ncsx-translations";
   import { app } from "./lib/state.svelte";
+  import { loadRemoteInstallUrl } from "./lib/install-storage";
 
   const log = getLogger("NCSX.web");
   import InstallPicker from "./components/InstallPicker.svelte";
@@ -12,6 +13,7 @@
   import ErrorBanner from "./components/ErrorBanner.svelte";
   import ConnectButton from "./components/ConnectButton.svelte";
   import SettingsDialog from "./components/SettingsDialog.svelte";
+  import ConnectSessionDialog from "./components/ConnectSessionDialog.svelte";
   import IdentityPanel from "./components/IdentityPanel.svelte";
   import FaEditorDialog from "./components/FaEditorDialog.svelte";
   import ZcsEditorDialog from "./components/ZcsEditorDialog.svelte";
@@ -43,6 +45,80 @@
     app.availableJobs = null;
     app.identity = null;
   }
+
+  /**
+   * Top-bar install-source pill — label + tooltip describing where
+   * the active install's bytes are coming from. The label stays
+   * short (one or two words); the tooltip carries the path / URL /
+   * marker so the user can confirm at a hover. Reads from reactive
+   * `app.installSource` so mid-session source switches refresh the
+   * chip without a reload.
+   */
+  const installPill = $derived.by((): { label: string; tooltip: string } => {
+    if (!app.install) {
+      return { label: "no install", tooltip: "No install loaded" };
+    }
+    const source = app.installSource;
+    const rootName = app.install.root.name || "(unnamed root)";
+    if (source?.source === "remote") {
+      const url = loadRemoteInstallUrl();
+      return {
+        label: "remote",
+        tooltip: `Remote VFS · ${url ?? rootName}`,
+      };
+    }
+    if (source?.source === "bundled") {
+      return {
+        label: "bundled",
+        tooltip: `OPFS bundle · ${rootName} · ${source.fileCount} files · imported ${source.importedAt}`,
+      };
+    }
+    if (source?.source === "fs-access") {
+      return {
+        label: "local",
+        tooltip: `Local folder · ${rootName}`,
+      };
+    }
+    return { label: "?", tooltip: `Unknown install source · ${rootName}` };
+  });
+
+  /**
+   * Connection-mode pill — short label for the active path between
+   * ncsx and the cable, tooltip carrying the concrete endpoint /
+   * baud / URL. Sits next to the Connect button so the user sees at
+   * a glance whether they're driving a local Web Serial cable, a
+   * J2534 OpenPort, a remote ediabasx-server, or a Bimmerz Connect
+   * session.
+   */
+  const modePill = $derived.by((): { label: string; tooltip: string } => {
+    const cfg = app.config;
+    if (cfg.mode === "client") {
+      if (cfg.connectionMethod === "connect") {
+        return {
+          label: "bimmerz connect",
+          tooltip: `Client · Bimmerz Connect relay · ${cfg.connectRelayUrl ?? "wss://connect.bimmerz.app"}`,
+        };
+      }
+      return {
+        label: "ws server",
+        tooltip: `Client · direct WebSocket · ${cfg.serverUrl ?? "(URL not set)"}`,
+      };
+    }
+    if (cfg.interface === "webserial") {
+      const baud = cfg.serial?.baudRate ?? 9600;
+      return { label: "web serial", tooltip: `Embedded · Web Serial @ ${baud}` };
+    }
+    if (cfg.interface === "j2534") {
+      return { label: "j2534", tooltip: "Embedded · J2534 (Tactrix OpenPort 2.0)" };
+    }
+    if (cfg.interface === "gateway") {
+      return {
+        label: "gateway",
+        tooltip: `Embedded · Remote gateway · ${cfg.gateway?.url ?? "(URL not set)"}`,
+      };
+    }
+    return { label: cfg.interface, tooltip: `Embedded · ${cfg.interface}` };
+  });
 </script>
 
 <div class="flex h-full flex-col bg-base text-foreground">
@@ -94,6 +170,49 @@
         </svg>
       </a>
       <span class="flex-1"></span>
+      <!-- Right cluster: data-location pill, mode pill, Settings,
+           Connect button. Pills are borderless + faded — metadata,
+           not chrome. Folder icon = install source, plug icon =
+           comm link. Tooltips carry the concrete endpoint so the
+           user can confirm at a hover without opening Settings. -->
+      <span
+        class="flex items-center gap-1.5 text-xs text-faint"
+        title={installPill.tooltip}
+      >
+        <svg
+          viewBox="0 0 16 16"
+          width="13"
+          height="13"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.4a1.5 1.5 0 0 1 1.06.44L8 4.5h4.5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5z"/>
+        </svg>
+        {installPill.label}
+      </span>
+      <span
+        class="flex items-center gap-1.5 text-xs text-faint"
+        title={modePill.tooltip}
+      >
+        <svg
+          viewBox="0 0 16 16"
+          width="13"
+          height="13"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M5 2v3.5M9 2v3.5M3.5 5.5h7v3a3.5 3.5 0 0 1-3.5 3.5h0a3.5 3.5 0 0 1-3.5-3.5v-3zM7 12v2"/>
+        </svg>
+        {modePill.label}
+      </span>
       <button
         class="rounded border border-divider bg-surface px-2 py-0.5 text-xs text-muted transition hover:border-accent hover:bg-elevated"
         onclick={() => (app.showSettings = true)}
@@ -130,6 +249,7 @@
 
   <ErrorBanner />
   <SettingsDialog />
+  <ConnectSessionDialog />
   <FaEditorDialog />
   <ZcsEditorDialog />
   <FgnrEditorDialog />

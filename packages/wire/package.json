@@ -1,7 +1,7 @@
 {
   "name": "@emdzej/ncsx-wire",
-  "version": "0.7.0",
-  "description": "Shared EdiabasLike type contract — minimal Ediabas-shape that ncsx packages consume without hard-depending on @emdzej/ediabasx-ediabas.",
+  "version": "0.8.0",
+  "description": "Re-exports of @emdzej/ediabasx-core's IEdiabas surface plus small helpers (findResult / jobStatus / dataSets) used across ncsx packages.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -15,6 +15,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/ediabasx-core": "^0.7.1"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",
