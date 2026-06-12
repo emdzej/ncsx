@@ -7,6 +7,7 @@ export default [
   {
     ignores: [
       '**/dist/**',
+      '**/dist-embedded/**',
       '**/node_modules/**',
       '**/*.test.ts',
       '**/scripts/**',
@@ -17,6 +18,7 @@ export default [
       // The web apps' SPA-only entry-style configs and build outputs live
       // under apps/*/dist and apps/*/public; nothing user-authored there.
       'apps/*/dist/**',
+      'apps/*/dist-embedded/**',
       'apps/*/public/**',
     ],
   },

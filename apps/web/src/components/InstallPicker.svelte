@@ -36,6 +36,7 @@
     clearInstallSource,
   } from "../lib/bundled-install";
   import { discoverNcsxInstall } from "../lib/daten-install";
+  import { isEmbedded, embeddedEndpoints } from "../lib/embedded";
 
   const supported = isFileSystemAccessSupported();
 
@@ -46,6 +47,26 @@
   let remoteUrl = $state("");
 
   onMount(async () => {
+    /* Embedded build (dongle-hosted SPA): the install URL is fixed
+       to the dongle's `${origin}/data`. Mount once on boot and bail.
+       The flag is a compile-time constant so the rest of this
+       onMount tree-shakes out of the embedded bundle. */
+    if (isEmbedded) {
+      restoring = true;
+      try {
+        const { installHttpBase } = embeddedEndpoints();
+        /* `skipSave: true` — the URL is build-time-derived from
+           window.location, no need to persist (it'd just be
+           regenerated next load anyway). */
+        await mountRemote(installHttpBase, { skipSave: true });
+      } catch (err) {
+        app.error = `Couldn't mount the dongle's install at ${embeddedEndpoints().installHttpBase}: ${err instanceof Error ? err.message : String(err)}`;
+      } finally {
+        restoring = false;
+      }
+      return;
+    }
+
     /* Restore order matters: try remote first (URL-based, cheap),
        then FSA (needs permission grant on user gesture). If neither
        restores cleanly we fall through to the picker tiles. */
@@ -190,6 +211,26 @@
 </script>
 
 <div class="flex h-full flex-col items-center justify-center gap-8 p-8">
+  {#if isEmbedded}
+    <!-- Dongle-hosted build: install auto-mounts from `${origin}/data`
+         on boot (see onMount above). Picker tiles are dead code in
+         this build. Surface status / error if the mount didn't
+         succeed. -->
+    <h1 class="text-4xl font-bold text-accent">NCSX</h1>
+    {#if restoring}
+      <p class="text-sm text-faint">Mounting install from dongle…</p>
+    {:else if app.error}
+      <div class="max-w-md rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-600/40 dark:bg-red-950/40 dark:text-red-300">
+        {app.error}
+      </div>
+      <p class="text-xs text-faint">
+        The dongle's <code class="text-muted">{embeddedEndpoints().installHttpBase}</code> endpoint isn't reachable.
+        Check the dongle's status LED and refresh.
+      </p>
+    {:else}
+      <p class="text-sm text-faint">Waiting for dongle…</p>
+    {/if}
+  {:else}
   <div class="max-w-2xl text-center">
     <h1 class="text-4xl font-bold text-accent">NCSX</h1>
     <p class="mt-2 text-muted">
@@ -333,5 +374,6 @@
     <div class="max-w-md rounded border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-600/40 dark:bg-red-950/40 dark:text-red-300">
       {app.error}
     </div>
+  {/if}
   {/if}
 </div>

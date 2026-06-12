@@ -22,15 +22,47 @@ function cleanSemver(range: string | undefined): string {
 const ediabasxVersion = cleanSemver(pkg.dependencies?.["@emdzej/ediabasx-ediabas"]);
 const inpaxVersion = cleanSemver(pkg.dependencies?.["@emdzej/inpax-interpreter"]);
 
-export default defineConfig({
+/**
+ * Build modes — same shape as the ediabasx-web / inpax-web builds:
+ *
+ *   • `pnpm web:build` — default. Full browser SPA: install picker
+ *     (FSA + remote URL), mode toggle, settings, PWA, persisted
+ *     config. Deployed to ncsx.bimmerz.app etc.
+ *
+ *   • `pnpm web:build:embedded` — dongle build. SPA hosted by the
+ *     dongle at `/ncsx/`, talking back to the same origin for
+ *     IEdiabas (`/rpc/ediabasx`) and install (`/data`):
+ *       - `__EMBEDDED__` compile-time constant tree-shakes the
+ *         picker / mode toggle / settings UI for the locked fields.
+ *       - Mode / connectionMethod / serverUrl locked to client +
+ *         direct + `${origin}/rpc/ediabasx` (see `lib/embedded.ts`).
+ *       - Install auto-mounts from `${origin}/data` on boot.
+ *       - Settings panels for connection + install are read-only
+ *         "Connected to dongle" summaries.
+ *       - PWA service worker dropped (no internet, no autoUpdate).
+ *     Persisted logging level + theme + UI prefs ride along normally.
+ *
+ * Outputs live side-by-side: `dist/` and `dist-embedded/`.
+ */
+export default defineConfig(({ mode }) => {
+  const isEmbedded = mode === "embedded";
+  return {
+  /* Embedded build is mounted at `/ncsx/` on the dongle — firmware
+     serves `/ediabasx/`, `/inpax/`, `/ncsx/`, `/nfsx/` side by side
+     with `/rpc/ediabasx` and `/data/` as siblings at the HTTP root. */
+  base: isEmbedded ? "/ncsx/" : "/",
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
     __EDIABASX_VERSION__: JSON.stringify(ediabasxVersion),
     __INPAX_VERSION__: JSON.stringify(inpaxVersion),
+    __EMBEDDED__: JSON.stringify(isEmbedded),
   },
   plugins: [
     svelte(),
-    VitePWA({
+    /* PWA — skipped in the embedded build (no offline-cache benefit
+       on a dongle with no internet, autoUpdate is confusing on
+       hardware the user doesn't manage). */
+    !isEmbedded && VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["icon.svg"],
       manifest: {
@@ -92,9 +124,23 @@ export default defineConfig({
     ],
   },
   build: {
+    /* Embedded output lives in dist-embedded/ — firmware packagers
+       ship it at the dongle's `/ncsx/` HTTP prefix. */
+    outDir: isEmbedded ? "dist-embedded" : "dist",
+    /* Drop sourcemaps on the dongle — flash is precious. */
+    sourcemap: !isEmbedded,
     commonjsOptions: {
       include: [/node_modules/, /packages\//],
       transformMixedEsModules: true,
     },
+    /* Embedded build drops the PWA plugin (see above). main.ts's
+       `import("virtual:pwa-register")` is gated behind
+       `if (!isEmbedded)` and tree-shakes, but Rollup still resolves
+       the virtual specifier statically — mark it external so the
+       unreachable call site doesn't fail the build. */
+    rollupOptions: isEmbedded
+      ? { external: ["virtual:pwa-register"] }
+      : undefined,
   },
+  };
 });

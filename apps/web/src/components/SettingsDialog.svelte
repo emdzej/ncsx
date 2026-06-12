@@ -20,6 +20,7 @@
   import { FsaDirectory } from "@emdzej/bimmerz-vfs";
   import { discoverNcsxInstall } from "../lib/daten-install";
   import { app } from "../lib/state.svelte";
+  import { isEmbedded } from "../lib/embedded";
   import { applyLoggerConfig } from "../lib/logger-wiring";
   import { LOG_CATEGORIES as NCSX_LOG_CATEGORIES } from "@emdzej/ncsx-chassis";
   import { LOG_CATEGORIES as INPAX_LOG_CATEGORIES } from "@emdzej/inpax-interpreter";
@@ -199,6 +200,24 @@
 
       <section class="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-sm text-foreground">
         {#if activeTab === "connection"}
+        {#if isEmbedded}
+          <!-- Embedded (dongle-hosted) build: mode + server URL +
+               interface are locked at build time. Surface a small
+               read-only summary so the host is still discoverable;
+               the user can't override these without rebuilding. -->
+          <fieldset class="flex flex-col gap-2 rounded border border-divider bg-elevated/60 p-3">
+            <legend class="px-1 text-xs font-bold uppercase tracking-wider text-faint">
+              Connection
+            </legend>
+            <div class="text-xs">
+              Connected to dongle at
+              <code class="ml-1 font-mono text-foreground">{window.location.host}</code>
+            </div>
+            <div class="text-xs text-faint">
+              Mode + server URL + install source are fixed for this build (dongle-hosted SPA).
+            </div>
+          </fieldset>
+        {:else}
         <!-- Mode toggle — embedded (local cable) vs client (remote
              ediabasx-server via WebSocket or Bimmerz Connect relay).
              The fieldsets below branch on this. -->
@@ -216,9 +235,39 @@
                across the bimmerz family via @emdzej/ediabasx-web-ui. -->
           <InterfaceConfigPanel bind:config={app.config} />
         {/if}
+        {/if}
 
 
         {:else if activeTab === "data"}
+          {#if isEmbedded}
+            <!-- Embedded build: install is locked to the dongle's
+                 `${origin}/data` endpoint. No "change folder" /
+                 "forget" — those would just leave the install in an
+                 inconsistent state since the next load re-mounts
+                 the same URL. Read-only summary instead. -->
+            <div>
+              <span class="mb-1 block text-xs font-semibold uppercase tracking-wider text-faint">
+                Install · dongle
+              </span>
+              <div class="rounded border border-divider bg-base px-3 py-2 text-sm">
+                <div>
+                  {#if app.install}
+                    <span class="font-mono text-foreground">{app.install.root.name}</span>
+                    <span class="ml-2 text-xs text-faint">
+                      · {app.install.chassisCodes.length} chassis declared
+                    </span>
+                  {:else}
+                    <span class="italic text-faint">(mounting…)</span>
+                  {/if}
+                </div>
+                <div class="mt-2 text-xs text-faint">
+                  Served by the dongle at
+                  <code class="font-mono">{window.location.host}/data</code>.
+                  Re-index on the dongle to refresh.
+                </div>
+              </div>
+            </div>
+          {:else}
           <!-- Install root —
                surfaces the picked BMW Standard Tools folder + lets the user
                swap it (e.g. moved the install) or forget the saved handle
@@ -257,6 +306,7 @@
               </div>
             </div>
           </div>
+          {/if}
 
         {:else if activeTab === "developer"}
         <!-- Logging — bimmerz-logger central config -->

@@ -134,12 +134,20 @@ export function isFileSystemAccessSupported(): boolean {
 
 /* ── Remote install URL ──────────────────────────────────────────── */
 
+import { isEmbedded, embeddedEndpoints } from "./embedded";
+
 /**
  * Persisted URL for a remote install — a tree of `index.json` files
  * served via HTTP and walked by `HttpDirectory` from
  * `@emdzej/bimmerz-vfs`. Stored in localStorage (URLs are short
  * strings, no need for IndexedDB) and restored on app boot the same
  * way the FSA handle is.
+ *
+ * In embedded builds the URL is build-time fixed to the dongle's
+ * `${origin}/data`: save+clear become no-ops (the embedded boot path
+ * mounts unconditionally), and load returns the dongle endpoint so
+ * the top-bar source pill's tooltip resolves without every call
+ * site having to branch on `isEmbedded`.
  *
  * The session-blob equivalent for client mode (`sessionId.token`)
  * stays transient on `app.connectSessionId` — that's a credential.
@@ -148,16 +156,19 @@ export function isFileSystemAccessSupported(): boolean {
 const REMOTE_URL_KEY = "ncsx.web.install.remoteUrl";
 
 export function saveRemoteInstallUrl(url: string): void {
+  if (isEmbedded) return;
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(REMOTE_URL_KEY, url);
 }
 
 export function loadRemoteInstallUrl(): string | null {
+  if (isEmbedded) return embeddedEndpoints().installHttpBase;
   if (typeof localStorage === "undefined") return null;
   return localStorage.getItem(REMOTE_URL_KEY);
 }
 
 export function clearRemoteInstallUrl(): void {
+  if (isEmbedded) return;
   if (typeof localStorage === "undefined") return;
   localStorage.removeItem(REMOTE_URL_KEY);
 }

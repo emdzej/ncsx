@@ -16,6 +16,8 @@
  * picker and live on `app.install` separately — they're per-install, not per-machine.
  */
 
+import { isEmbedded, embeddedEndpoints } from "./embedded";
+
 export type InterfaceType = "webserial" | "j2534" | "gateway";
 export type SerialProtocol = "uart" | "kwp" | "isotp" | "tp20";
 export type SerialInitMode = "fast" | "five-baud";
@@ -174,44 +176,85 @@ const DEFAULT_CONFIG: WebConfig = {
   },
 };
 
+/**
+ * Connection fields the embedded build owns at compile/boot time —
+ * the user can't change these on the dongle. Other persisted prefs
+ * (theme, logging, UI) flow through the regular localStorage merge.
+ *
+ * `serverUrl` is derived from `window.location.origin` so the same
+ * embedded artefact works regardless of which IP/host the dongle is
+ * reachable at.
+ */
+function embeddedConnectionOverrides(): Pick<
+  WebConfig,
+  "mode" | "connectionMethod" | "serverUrl"
+> {
+  return {
+    mode: "client",
+    connectionMethod: "direct",
+    serverUrl: embeddedEndpoints().serverWsUrl,
+  };
+}
+
 export function loadConfig(): WebConfig {
-  if (typeof localStorage === "undefined") return structuredClone(DEFAULT_CONFIG);
+  if (typeof localStorage === "undefined") {
+    return isEmbedded
+      ? { ...structuredClone(DEFAULT_CONFIG), ...embeddedConnectionOverrides() }
+      : structuredClone(DEFAULT_CONFIG);
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return structuredClone(DEFAULT_CONFIG);
-    const parsed = JSON.parse(raw) as Partial<WebConfig>;
-    /* Coerce older / unknown interface values back to the default so
-       the UI doesn't show a phantom selection. */
-    const iface: InterfaceType =
-      parsed.interface === "webserial" ||
-      parsed.interface === "j2534" ||
-      parsed.interface === "gateway"
-        ? parsed.interface
-        : DEFAULT_CONFIG.interface;
-    const mode: ConnectionMode =
-      parsed.mode === "embedded" || parsed.mode === "client"
-        ? parsed.mode
-        : DEFAULT_CONFIG.mode;
-    const connectionMethod: ClientConnectionMethod =
-      parsed.connectionMethod === "direct" || parsed.connectionMethod === "connect"
-        ? parsed.connectionMethod
-        : DEFAULT_CONFIG.connectionMethod!;
-    return {
-      ...structuredClone(DEFAULT_CONFIG),
-      ...parsed,
-      mode,
-      connectionMethod,
-      interface: iface,
-      serial: { ...DEFAULT_CONFIG.serial, ...parsed.serial },
-      gateway: { ...DEFAULT_CONFIG.gateway, ...parsed.gateway },
-    };
+    const base = !raw
+      ? structuredClone(DEFAULT_CONFIG)
+      : (() => {
+          const parsed = JSON.parse(raw) as Partial<WebConfig>;
+          /* Coerce older / unknown interface values back to the default so
+             the UI doesn't show a phantom selection. */
+          const iface: InterfaceType =
+            parsed.interface === "webserial" ||
+            parsed.interface === "j2534" ||
+            parsed.interface === "gateway"
+              ? parsed.interface
+              : DEFAULT_CONFIG.interface;
+          const mode: ConnectionMode =
+            parsed.mode === "embedded" || parsed.mode === "client"
+              ? parsed.mode
+              : DEFAULT_CONFIG.mode;
+          const connectionMethod: ClientConnectionMethod =
+            parsed.connectionMethod === "direct" ||
+            parsed.connectionMethod === "connect"
+              ? parsed.connectionMethod
+              : DEFAULT_CONFIG.connectionMethod!;
+          return {
+            ...structuredClone(DEFAULT_CONFIG),
+            ...parsed,
+            mode,
+            connectionMethod,
+            interface: iface,
+            serial: { ...DEFAULT_CONFIG.serial, ...parsed.serial },
+            gateway: { ...DEFAULT_CONFIG.gateway, ...parsed.gateway },
+          };
+        })();
+    /* In embedded builds the connection fields are dongle-owned —
+       the persisted mode/serverUrl are stale junk (dongle's IP can
+       change between sessions). Override on every load; leave
+       theme/logging/UI prefs intact. */
+    if (isEmbedded) {
+      return { ...base, ...embeddedConnectionOverrides() };
+    }
+    return base;
   } catch {
-    return structuredClone(DEFAULT_CONFIG);
+    return isEmbedded
+      ? { ...structuredClone(DEFAULT_CONFIG), ...embeddedConnectionOverrides() }
+      : structuredClone(DEFAULT_CONFIG);
   }
 }
 
 export function saveConfig(config: WebConfig): void {
   if (typeof localStorage === "undefined") return;
+  /* Save the full object even in embedded mode — the connection
+     fields will be re-overridden on next load, so leaving them in
+     storage is harmless drift. Keeps saveConfig idempotent. */
   localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
 }
 
