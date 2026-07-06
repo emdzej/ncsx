@@ -1,11 +1,31 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getLogger } from "@emdzej/bimmerz-logger";
+  import { useEmbeddedAutoConnect } from "@emdzej/bimmerz-ui";
   import { parseTranslationsCsv } from "@emdzej/ncsx-translations";
   import { app } from "./lib/state.svelte";
+  import { connection, connect, disconnect } from "./lib/ediabas-session.svelte";
+  import { isEmbedded } from "./lib/embedded";
   import { loadRemoteInstallUrl } from "./lib/install-storage";
 
   const log = getLogger("NCSX.web");
+
+  /* Embedded-mode lifecycle — dongle-hosted ncsx auto-connects to the
+     same-origin `/rpc/ediabasx` socket once the DATEN install has
+     mounted (chassis/module UI needs `app.install` populated to know
+     which SG catalogues to offer). Re-enters exponential backoff on
+     transient drops. No-op in the browser build so the manual
+     Connect button keeps ownership. */
+  const autoConnectLog = getLogger("ncsx.autoconnect");
+  useEmbeddedAutoConnect({
+    isEmbedded,
+    connect,
+    disconnect,
+    isReady: () => app.install !== null,
+    isConnected: () => connection.status.kind === "connected",
+    log: (msg: string, level?: "info" | "warn" | "error") =>
+      autoConnectLog[level ?? "info"](msg),
+  });
   import InstallPicker from "./components/InstallPicker.svelte";
   import ChassisList from "./components/ChassisList.svelte";
   import ModuleList from "./components/ModuleList.svelte";

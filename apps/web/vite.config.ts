@@ -59,6 +59,38 @@ export default defineConfig(({ mode }) => {
   },
   plugins: [
     svelte(),
+    /* Bimmerz Box app manifest. The dongle's dashboard auto-discovers
+       apps under `/sdcard/apps/<slug>/` and reads each folder's
+       `manifest.json` to render a tile — see
+       https://github.com/emdzej/bimmerz-box#app-manifest. Emitting
+       from the plugin (not a static file in `public/`) keeps the
+       `version` field in lockstep with package.json without a manual
+       bump on every release. Only relevant to the embedded build. */
+    isEmbedded && {
+      name: "ncsx-embedded-manifest",
+      apply: "build" as const,
+      generateBundle(): void {
+        this.emitFile({
+          type: "asset",
+          fileName: "manifest.json",
+          source: JSON.stringify(
+            {
+              name: "NCSX",
+              description: "BMW NCS Expert coding in the browser — TRC / MAN editor",
+              version: pkg.version,
+              icon: "icon.svg",
+              /* Advisory — the dashboard flags tiles whose requirements
+                 aren't met by the dongle hardware. NCS coding writes
+                 back through EDIABAS, which drives K-line on the
+                 relevant chassis. Same tag as ediabasx / inpax. */
+              requires: ["kline"],
+            },
+            null,
+            2,
+          ) + "\n",
+        });
+      },
+    },
     /* PWA — skipped in the embedded build (no offline-cache benefit
        on a dongle with no internet, autoUpdate is confusing on
        hardware the user doesn't manage). */
@@ -122,6 +154,13 @@ export default defineConfig(({ mode }) => {
       "@emdzej/inpax-providers",
       "@emdzej/inpax-ui-provider-core",
     ],
+    /* `@emdzej/bimmerz-ui` ships source-only `.svelte` + `.svelte.ts`.
+       Excluded from pre-bundling so each file goes through
+       `@sveltejs/vite-plugin-svelte`'s transform on-demand — esbuild
+       lacks the loader for those extensions and would choke on TS
+       syntax in a `.svelte.ts` rune helper. Same pattern the ediabasx
+       and inpax web apps use. */
+    exclude: ["@emdzej/bimmerz-ui"],
   },
   build: {
     /* Embedded output lives in dist-embedded/ — firmware packagers

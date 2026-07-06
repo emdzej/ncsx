@@ -13,7 +13,8 @@
     "web": "pnpm --filter @emdzej/ncsx-web dev",
     "web:build": "pnpm --filter @emdzej/ncsx-web build",
     "web:build:embedded": "pnpm --filter @emdzej/ncsx-web build:embedded",
-    "web:preview": "pnpm --filter @emdzej/ncsx-web preview"
+    "web:preview": "pnpm --filter @emdzej/ncsx-web preview",
+    "web:preview:embedded": "pnpm --filter @emdzej/ncsx-web preview:embedded"
   },
   "devDependencies": {
     "@eslint/js": "^9.19.0",

@@ -4,6 +4,72 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.0 — 2026-07-06
+
+Adopts [ediabasx 0.8.0](https://github.com/emdzej/ediabasx/releases/tag/0.8.0)
+and [inpax 0.12.0](https://github.com/emdzej/inpax/releases/tag/0.12.0),
+and wires the dongle-embedded ncsx-web into the shared
+`useEmbeddedAutoConnect` lifecycle hook from `@emdzej/bimmerz-ui@0.2.0`.
+Ships a Bimmerz Box `manifest.json` alongside the build, and attaches
+`ncsx-web-embedded-<version>.zip` to every GitHub Release so dongle
+packagers can drop the SPA onto the SD card without cloning the
+monorepo.
+
+Nothing changes for the hosted browser build at `ncsx.bimmerz.app` —
+the auto-connect hook is a no-op when `__EMBEDDED__` is false, so the
+manual Connect button stays in charge.
+
+### Added
+
+- **Embedded-mode auto-connect** in `apps/web`. `App.svelte` calls
+  `useEmbeddedAutoConnect({ isEmbedded, connect, disconnect, isReady,
+  isConnected, log })` from `@emdzej/bimmerz-ui`. The hook opens the
+  same-origin `/rpc/ediabasx` RPC session once the DATEN install has
+  mounted (`isReady: () => app.install !== null`), retries with
+  exponential backoff on transient drops (1 → 2 → 4 → 8 → 16 → 30 s
+  cap), and fires `disconnect()` on `beforeunload` / `pagehide` so
+  the dongle WebSocket closes cleanly. Attempts stream to the
+  `ncsx.autoconnect` bimmerz-logger category.
+- **`web:preview:embedded`** — new root script that runs
+  `vite preview --mode embedded`, serving `dist-embedded/` at
+  `http://localhost:4173/ncsx/` with the same base-path + no-PWA
+  behaviour as the on-dongle bundle.
+- **Bimmerz Box `manifest.json`** — a tiny Vite plugin
+  (`ncsx-embedded-manifest`) emits `dist-embedded/manifest.json` at
+  build time (`name` / `description` / `version` from `package.json`
+  / `icon` / `requires: ["kline"]`). The bimmerz-box dashboard
+  auto-discovers apps under `/sdcard/apps/` by reading this file —
+  see [bimmerz-box's App manifest section](https://github.com/emdzej/bimmerz-box#app-manifest).
+- **Embedded-build docs** — new "Embedded build (dongle-hosted)"
+  section in `apps/web/README.md` covering the compile-time connection
+  lock, the auto-connect hook, the no-PWA choice, the manifest, and
+  the `pnpm web:build:embedded` / `pnpm web:preview:embedded` workflow.
+
+### Release artefacts
+
+- **`ncsx-web-embedded-<version>.zip`** attached to each GitHub
+  Release via `publish.yml`. Workflow runs
+  `pnpm --filter @emdzej/ncsx-web build:embedded`, zips
+  `dist-embedded/`, and uploads via `gh release upload`. Skipped on
+  manual `workflow_dispatch` / dry runs. Required permission bumped
+  to `contents: write`.
+
+### Changed
+
+- **`@emdzej/ediabasx-*` deps bumped `^0.7.1` → `^0.8.0`** in
+  `ncsx-web`, `ncsx-wire`.
+- **`@emdzej/inpax-*` deps bumped `^0.11.1` → `^0.12.0`** in
+  `ncsx-web`, `ncsx-pfl`. Rides along the ediabasx uplift.
+
+### Dependencies
+
+- **`@emdzej/bimmerz-ui@^0.2.0`** — new dependency of
+  `@emdzej/ncsx-web`, pulled from npm. Source-only Svelte package
+  — added to `optimizeDeps.exclude` so each `.svelte` / `.svelte.ts`
+  file is routed through `@sveltejs/vite-plugin-svelte`'s transform
+  instead of esbuild's pre-bundler (which lacks the loader for those
+  extensions and would choke on TS syntax in a `.svelte.ts` file).
+
 ## 0.8.0 — 2026-06-06
 
 Pulls in [ediabasx 0.7.1](https://github.com/emdzej/ediabasx/releases/tag/0.7.1)

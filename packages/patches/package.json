@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-patches",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Shareable coding patches for ncsx — YAML files that describe FSW/PSW changes across one or more modules, with metadata for discoverability and runtime compatibility checks against the current FunctionList.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

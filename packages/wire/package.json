@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-wire",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Re-exports of @emdzej/ediabasx-core's IEdiabas surface plus small helpers (findResult / jobStatus / dataSets) used across ncsx packages.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,7 +17,7 @@
     "clean": "rm -rf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
-    "@emdzej/ediabasx-core": "^0.7.1"
+    "@emdzej/ediabasx-core": "^0.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.1",

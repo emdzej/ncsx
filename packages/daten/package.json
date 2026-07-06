@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-daten",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Parser for BMW NCSEXPER DATEN binary-frame files (BR_REF.DAT, *SGET.000, *SGVT.000, *.Cxx, etc.). Spec: ../../docs/daten-format.md",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-predicate",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "AUFTRAGSAUSDRUCK byte-coded predicate evaluator. Spec: ../../docs/ecu-selection.md §6",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
