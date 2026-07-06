@@ -10,6 +10,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      release_tag:
+        description: 'Attach embedded zip to an existing release (tag name, e.g. 0.9.1). Leave blank to skip artefact attach.'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   publish:
@@ -24,7 +29,15 @@ jobs:
       contents: write
       id-token: write
     steps:
+      # For a release trigger checkout defaults to that tag's ref.
+      # For a manual `workflow_dispatch` with `release_tag` set, we
+      # want to build the embedded bundle from THAT tag (not from
+      # `main`) so the zip matches what shipped. Passing an empty
+      # `ref` falls back to the default branch, which is what a
+      # regular `workflow_dispatch` (dry-run tests, etc.) wants.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.release_tag }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -76,25 +89,36 @@ jobs:
       # the Bimmerz Box). Not published to npm — packagers grab it
       # from the GitHub Release and drop it under `/sdcard/apps/ncsx/`.
       # See apps/web/README.md#embedded-build-dongle-hosted.
+      #
+      # Runs when either
+      #   (a) a `release` event fired, or
+      #   (b) `workflow_dispatch` was invoked with a non-empty
+      #       `release_tag` — the "attach the zip to an existing
+      #       release" path (useful when a prior publish workflow
+      #       failed before it got here and can't be safely rerun,
+      #       because rerun uses the workflow definition from the
+      #       triggering commit).
       - name: Build embedded web bundle
-        if: ${{ github.event_name == 'release' }}
+        if: ${{ github.event_name == 'release' || github.event.inputs.release_tag != '' }}
         run: pnpm --filter @emdzej/ncsx-web build:embedded
 
       # Zip with a versioned name so multiple releases coexist on the
-      # same download page. The release tag drives the version; skipped
-      # entirely for manual `workflow_dispatch` runs.
+      # same download page. On `release` events `GITHUB_REF_NAME` is
+      # the tag; on manual dispatches we take the tag from the input.
       - name: Package embedded web bundle
-        if: ${{ github.event_name == 'release' }}
+        if: ${{ github.event_name == 'release' || github.event.inputs.release_tag != '' }}
         id: package-embedded
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          tag="${{ github.event.inputs.release_tag != '' && github.event.inputs.release_tag || github.ref_name }}"
+          version="${tag#v}"
           artifact="ncsx-web-embedded-${version}.zip"
           (cd apps/web/dist-embedded && zip -r "../../../${artifact}" .)
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "artifact=${artifact}" >> "$GITHUB_OUTPUT"
 
       - name: Attach embedded web bundle to release
-        if: ${{ github.event_name == 'release' }}
+        if: ${{ github.event_name == 'release' || github.event.inputs.release_tag != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${GITHUB_REF_NAME}" "${{ steps.package-embedded.outputs.artifact }}" --clobber
+        run: gh release upload "${{ steps.package-embedded.outputs.tag }}" "${{ steps.package-embedded.outputs.artifact }}" --clobber
