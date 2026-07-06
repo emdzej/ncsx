@@ -87,6 +87,17 @@ function getNavigatorSerial(): WebNavigatorSerial | null {
  * server owns the SGBD catalogue — no SGBD resolver needed here.
  */
 export async function connect(): Promise<void> {
+  /* Idempotence — the auto-connect hook's `$effect` re-runs whenever
+     any reactive state it reads changes, including our own
+     `connection.status.kind`. Setting `.kind = 'connecting'` below
+     is itself a reactive write, so without this guard the hook would
+     re-enter `connect()` before the first attempt finishes, spinning
+     up N parallel WebSockets (seen: ~20 sockets to `/rpc/ediabasx`
+     from a single Connect). Matches the same guard inpax's
+     `connect()` uses in `apps/web/src/lib/connection.svelte.ts`. */
+  if (connection.status.kind === 'connecting') return;
+  if (connection.status.kind === 'connected' && connection.session) return;
+
   connection.status = { kind: 'connecting' };
 
   try {
