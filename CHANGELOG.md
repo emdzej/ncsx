@@ -4,6 +4,24 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.1 — 2026-07-06 — connect() idempotence
+
+`useEmbeddedAutoConnect`'s `$effect` re-runs on any reactive state
+it reads, and `connect()`'s own `connection.status = { kind:
+'connecting' }` is a reactive write — so the hook re-entered
+`connect()` before the first WebSocket finished opening, spinning
+up ~20 parallel sockets to `/rpc/ediabasx` from a single Connect
+click (observed dongle-side).
+
+Adds the same idempotence guard inpax's `connect()` has had since
+0.11.0.
+
+### Fixed
+
+- `apps/web/src/lib/ediabas-session.svelte.ts` — early-return from
+  `connect()` when `status.kind === 'connecting'` or when already
+  `'connected'` with an active session.
+
 ## 0.9.0 — 2026-07-06
 
 Adopts [ediabasx 0.8.0](https://github.com/emdzej/ediabasx/releases/tag/0.8.0)
