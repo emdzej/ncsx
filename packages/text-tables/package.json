@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-text-tables",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Parsers for NCSEXPER DATEN text tables (SGFAM, ZST, AT, AT.M00, AT.ZUS). Spec: ../../docs/daten-format.md §2",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -4,6 +4,21 @@ All notable changes to **ncsx** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.2 — 2026-07-07 — translations.csv fetch fixed in embedded build
+
+The embedded build serves the SPA under `/ncsx/`, but `App.svelte`
+fetched translations from an absolute-rooted `/translations.csv`.
+That hit the dongle's SPA-fallback (returned `index.html` as
+`200 OK`), the CSV parser choked, the `try/catch` swallowed the
+error — result: no translations in the embedded UI.
+
+### Fixed
+
+- `apps/web/src/App.svelte` — fetch translations from
+  `${import.meta.env.BASE_URL}translations.csv`. Vite substitutes
+  `BASE_URL` to `/` in the hosted browser build and `/ncsx/` in the
+  embedded build, so the same code resolves the right URL in both.
+
 ## 0.9.1 — 2026-07-06 — connect() idempotence
 
 `useEmbeddedAutoConnect`'s `$effect` re-runs on any reactive state

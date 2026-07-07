@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/ncsx-wire",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Re-exports of @emdzej/ediabasx-core's IEdiabas surface plus small helpers (findResult / jobStatus / dataSets) used across ncsx packages.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
