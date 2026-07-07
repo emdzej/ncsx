@@ -42,11 +42,17 @@
   import AboutDialog from "./components/AboutDialog.svelte";
 
   // Load the community-maintained translation dictionary on app boot. Vite serves
-  // `/translations.csv` from `apps/web/public/`. The CSV is ~1 MB but parses in
+  // `translations.csv` from `apps/web/public/`. The CSV is ~1 MB but parses in
   // ~30 ms in tests; we fire-and-forget so the install picker shows immediately.
+  //
+  // `import.meta.env.BASE_URL` resolves to `/` in the hosted browser build and
+  // `/ncsx/` in the dongle-embedded build (Vite substitutes at build time
+  // based on the `base` option in vite.config.ts). Without this the embedded
+  // build 404s (falls back to the SPA index.html), the CSV parser sees HTML,
+  // and the try/catch swallows the failure silently.
   onMount(async () => {
     try {
-      const res = await fetch("/translations.csv");
+      const res = await fetch(`${import.meta.env.BASE_URL}translations.csv`);
       if (!res.ok) return;
       app.translations = parseTranslationsCsv(await res.text());
     } catch (err) {
